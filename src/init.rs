@@ -48,7 +48,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let component_rs_state_rs_fn = from_pascal_to_snake(component_rs_state_js_fn.as_str());
     let component_rs_state_rs_js_ident = Ident::new(&component_rs_state_rs_fn, Span::call_site());
 
-    let create_js_fn = generate_create_component_fn(
+    let create_js_fn = generate_register_component_fn(
         fn_create_ident,
         tag_lit.clone(),
         component_rs_state_js_fn.as_str(),
@@ -123,22 +123,25 @@ fn generate_default_component_rs_fn(
     let store_name = store_name(&struct_name);
     let counter_name = counter_name(&struct_name);
 
+    let counter_ident = Ident::new(&counter_name, Span::call_site());
+    let store_ident = Ident::new(&store_name, Span::call_site());
+
     let expanded = quote! {
         #[callback(#js_name)] // initComponentStateStructName
         #[allow(non_snake_case)]
         pub fn #rust_name() -> u32 {  // init_component_state_struct_name, returns id for the instance of the element
             log!("Run counter init rs state.");
             let counter = #struct_name::default();
-            let wasm_id = #counter_name.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            let wasm_id = #counter_ident.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-            let mut store = #store_name.write();
+            let mut store = #store_ident.write().expect("failed to acquire write lock");
 
             if store.is_none() {
                 *store = Some(std::collections::HashMap::new());
             }
 
-            let store_instance = *store.unwrap();
-            store_instance.set(wasm_id, counter);
+            let store_map = store.as_mut().unwrap();
+            store_map.insert(wasm_id, counter);
             wasm_id
         }
     };
@@ -146,15 +149,25 @@ fn generate_default_component_rs_fn(
     expanded
 }
 
-fn generate_create_component_fn(
+fn generate_register_component_fn(
     name: Ident,
     tag: LitStr,
     init_state_fn: &str,
 ) -> proc_macro2::TokenStream {
+    let name_str_lit = LitStr::new(&name.to_string(), Span::call_site());
+
     let expanded = quote! {
+        ::inventory::submit! {
+            InitFn(#name)
+        }
+
         #[allow(non_snake_case)]
         pub fn #name() { // createComponentTheStructName
             let wasm_id = 0;
+
+            let component_name = #name_str_lit;
+            let tag_name = #tag;
+            log!("init component", component_name, tag_name);
 
             let js_init = String::from(
                 r#"
