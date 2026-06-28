@@ -61,8 +61,8 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     );
 
     let expanded = quote! {
-        #component_struct_item
         #global_store
+        #component_struct_item
         #rs_state_init_fn
         #create_js_fn
     };
@@ -70,14 +70,28 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     expanded.into()
 }
 
+fn store_name(struct_name: &Ident) -> String {
+    let store_name = from_pascal_to_snake(&struct_name.to_string()).to_uppercase() + "_COMPONENTS";
+    store_name
+}
+
+fn counter_name(struct_name: &Ident) -> String {
+    let store = store_name(struct_name);
+    let id_counter_name = format!("{}{}", store, "_NEXT_ID");
+    id_counter_name
+}
+
 fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
     // Generate:
-    // pub static COUNTER_COMPONENTS: RwLock<Option<Vec<Counter>>> = RwLock::new(None);
-    let store_name = from_pascal_to_snake(&struct_name.to_string()).to_uppercase() + "_COMPONENTS";
+    // pub static THETHING_COMPONENTS_COUNTER (AtomicU32)
+    // pub static THETHING_COMPONENTS: RwLock<Option<HashMap<u32, Counter>>> = RwLock::new(None);
+    let store_name = store_name(&struct_name);
+    let id_counter_name = Ident::new(&counter_name(&struct_name), Span::call_site());
     let store_ident = Ident::new(&store_name, Span::call_site());
 
     let expanded = quote! {
-        pub static #store_ident: std::sync::RwLock<Option<Vec<#struct_name>>> = std::sync::RwLock::new(None);
+        pub static #id_counter_name: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+        pub static #store_ident: std::sync::RwLock<Option<HashMap<u32, #struct_name>>> = std::sync::RwLock::new(None);
     };
 
     expanded
@@ -106,15 +120,26 @@ fn generate_default_component_rs_fn(
     js_name: Ident,
     struct_name: Ident,
 ) -> proc_macro2::TokenStream {
+    let store_name = store_name(&struct_name);
+    let counter_name = counter_name(&struct_name);
+
     let expanded = quote! {
         #[callback(#js_name)] // initComponentStateStructName
         #[allow(non_snake_case)]
-        pub fn #rust_name() -> u32 {  // init_component_state_struct_name, returns id
+        pub fn #rust_name() -> u32 {  // init_component_state_struct_name, returns id for the instance of the element
             log!("Run counter init rs state.");
             let counter = #struct_name::default();
-            //let mut counter_store = COUNTER_COMPONENTS.write().unwrap();
-            //*counter_store = Some(counter);
-            42
+            let wasm_id = #counter_name.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+
+            let mut store = #store_name.write();
+
+            if store.is_none() {
+                *store = Some(HashMap::new());
+            }
+
+            let store_instance = *store.unwrap();
+            store_instance.set(wasm_id, counter);
+            wasm_id
         }
     };
 
