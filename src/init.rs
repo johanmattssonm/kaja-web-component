@@ -36,33 +36,85 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     };
 
     let struct_name_ident = &component_struct_item.ident;
+
+    let global_store = generate_component_store(struct_name_ident.clone());
+
     let create_html_component_fn_name = format!("createComponent{}", struct_name_ident);
     let fn_create_ident = Ident::new(&create_html_component_fn_name, Span::call_site());
 
-    let component_rs_state_fn = format!("initComponentState{}", struct_name_ident);
-    let component_rs_state_fn_ident = Ident::new(&component_rs_state_fn, Span::call_site());
+    let component_rs_state_js_fn = format!("initComponentState{}", struct_name_ident);
+    let component_rs_state_js_fn_ident = Ident::new(&component_rs_state_js_fn, Span::call_site());
 
-    let create_fn = generate_create_component_fn(
+    let component_rs_state_rs_fn = from_pascal_to_snake(component_rs_state_js_fn.as_str());
+    let component_rs_state_rs_js_ident = Ident::new(&component_rs_state_rs_fn, Span::call_site());
+
+    let create_js_fn = generate_create_component_fn(
         fn_create_ident,
         tag_lit.clone(),
-        component_rs_state_fn.as_str(),
+        component_rs_state_js_fn.as_str(),
     );
 
-    let rs_state_fn = generate_default_component_rs_fn(component_rs_state_fn_ident);
+    let rs_state_init_fn = generate_default_component_rs_fn(
+        component_rs_state_js_fn_ident,
+        component_rs_state_rs_js_ident,
+        struct_name_ident.clone(),
+    );
 
     let expanded = quote! {
         #component_struct_item
-        #rs_state_fn
-        #create_fn
+        #global_store
+        #rs_state_init_fn
+        #create_js_fn
     };
 
     expanded.into()
 }
 
-fn generate_default_component_rs_fn(name: Ident) -> proc_macro2::TokenStream {
+fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
+    // Generate:
+    // pub static COUNTER_COMPONENTS: RwLock<Option<Vec<Counter>>> = RwLock::new(None);
+    let store_name = from_pascal_to_snake(&struct_name.to_string()).to_uppercase() + "_COMPONENTS";
+    let store_ident = Ident::new(&store_name, Span::call_site());
+
     let expanded = quote! {
+        pub static #store_ident: std::sync::RwLock<Option<Vec<#struct_name>>> = std::sync::RwLock::new(None);
+    };
+
+    expanded
+}
+
+fn from_pascal_to_snake(fn_name: &str) -> String {
+    let mut result = String::new();
+
+    for (i, c) in fn_name.chars().enumerate() {
+        if c.is_uppercase() {
+            if i != 0 {
+                result.push('_');
+            }
+
+            result.extend(c.to_lowercase());
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
+fn generate_default_component_rs_fn(
+    rust_name: Ident,
+    js_name: Ident,
+    struct_name: Ident,
+) -> proc_macro2::TokenStream {
+    let expanded = quote! {
+        #[callback(#js_name)] // initComponentStateStructName
         #[allow(non_snake_case)]
-        pub fn #name() { // initComponentStateStructName
+        pub fn #rust_name() -> u32 {  // init_component_state_struct_name, returns id
+            log!("Run counter init rs state.");
+            let counter = #struct_name::default();
+            //let mut counter_store = COUNTER_COMPONENTS.write().unwrap();
+            //*counter_store = Some(counter);
+            42
         }
     };
 
