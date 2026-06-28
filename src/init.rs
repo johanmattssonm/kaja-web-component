@@ -74,42 +74,41 @@ fn generate_create_component_fn(
     tag: LitStr,
     init_state_fn: &str,
 ) -> proc_macro2::TokenStream {
-    let js_init = String::from(
-        r#"
-            let componentId = -1;
-
-            return class extends HTMLElement {
-                connectedCallback() {
-                    if (componentId == -1) {
-                        componentId = __INIT_CALLBACK;
-                    }
-
-                    counterComponentConnect(this, componentId);
-                }
-
-                disconnectedCallback() {
-                    counterComponentDisconnect(this, componentId);
-                }
-
-                attributeChangedCallback(name, oldValue, newValue) {
-                    //callbacks.attributeChanged(this, name, oldValue, newValue);
-                }
-
-                static get observedAttributes() {
-                    return [];
-                }
-            }
-    "#,
-    );
-
-    let js_init_with_state = js_init.replace("__INIT_CALLBACK", #init_state_fn);
-
     let expanded = quote! {
         #[allow(non_snake_case)]
         pub fn #name() { // createComponentTheStructName
             let wasm_id = 0;
-            let class_init_fn = format!()
-            let component = Function::new_no_args(r#"js_init_with_state"#);
+
+            let js_init = String::from(
+                r#"
+                    let componentId = -1;
+
+                    return class extends HTMLElement {
+                        connectedCallback() {
+                            if (componentId == -1) {
+                                componentId = __INIT_CALLBACK;
+                            }
+
+                            counterComponentConnect(this, componentId);
+                        }
+
+                        disconnectedCallback() {
+                            counterComponentDisconnect(this, componentId);
+                        }
+
+                        attributeChangedCallback(name, oldValue, newValue) {
+                            //callbacks.attributeChanged(this, name, oldValue, newValue);
+                        }
+
+                        static get observedAttributes() {
+                            return [];
+                        }
+                    }
+            "#,
+            );
+
+            let js_init_with_state = js_init.replace("__INIT_CALLBACK", #init_state_fn);
+            let component = js_sys::Function::new_no_args(js_init_with_state.as_str());
 
             let class = component.call0(&JsValue::NULL);
 
