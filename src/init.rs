@@ -146,29 +146,12 @@ fn observed_quote(observed_js_fn: &str, struct_name: &Ident) -> proc_macro2::Tok
     let rs_name_str = from_pascal_to_snake(observed_js_fn);
     let rs_name_ident = Ident::new(&rs_name_str, Span::call_site());
 
-    let store_name_str = store_name(struct_name);
-    let store_ident = Ident::new(&store_name_str, Span::call_site());
-
     let struct_ident = struct_name;
 
     let expanded = quote! {
         #[callback(#js_callback_ident)]
-        fn #rs_name_ident(element: HtmlElement, wasm_id: u32) -> &'static [&'static str] {
-            let mut store = #store_ident.write().unwrap();
-
-            if store.is_none() {
-                error!("Component not found in connect.");
-                return &[];
-            }
-
-            let store_map = store.as_mut().unwrap();
-
-            if let Some(_component) = store_map.get_mut(&wasm_id) {
-                #struct_ident::observed_attributes(element)
-            } else {
-                error!("Component id {} not found in observed attributes.", wasm_id);
-                &[]
-            }
+        fn #rs_name_ident() -> &'static [&'static str] {
+            #struct_ident::observed_attributes()
         }
     };
 
@@ -291,7 +274,7 @@ fn create_class(
                         }
 
                         static get observedAttributes() {
-                            return __OBSERVED_CALLBACK(this, this.componentId);;
+                            return __OBSERVED_CALLBACK();
                         }
                     }
             "#,
