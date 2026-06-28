@@ -53,8 +53,8 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         attach_js.as_str(),
     );
 
-    let rs_self = gen_rust_self(struct_name_ident.clone(), init_self_js_ident);
-    let attach_fn = attach_quote(&attach_js);
+    let rs_self = gen_rust_self(component_struct_item.clone(), init_self_js_ident);
+    let attach_fn = attach_quote(&attach_js, struct_name_ident);
 
     let expanded = quote! {
         #global_store
@@ -67,17 +67,20 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     expanded.into()
 }
 
-fn attach_quote(atach_state_js_fn: &str) -> proc_macro2::TokenStream {
+fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::TokenStream {
     let js_callback_ident = Ident::new(atach_state_js_fn, Span::call_site());
     let rs_name_str = from_pascal_to_snake(atach_state_js_fn);
     let rs_name_ident = Ident::new(&rs_name_str, Span::call_site());
 
+    let store_name_str = store_name(struct_name);
+    let store_ident = Ident::new(&store_name_str, Span::call_site());
+
     let expanded = quote! {
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(element: HtmlElement, wasm_id: u32) {
-            gloo::console::log!("counterComponentConnect generated but hard coded wasm_id: {}", wasm_id);
+            gloo::console::log!("componentConnect generated wasm_id: {}", wasm_id);
 
-            let mut store = COUNTER_COMPONENTS.write().unwrap();
+            let mut store = #store_ident.write().unwrap();
 
             if store.is_none() {
                 error!("Component not found in connect.");
@@ -86,8 +89,8 @@ fn attach_quote(atach_state_js_fn: &str) -> proc_macro2::TokenStream {
 
             let store_map = store.as_mut().unwrap();
 
-            if let Some(counter) = store_map.get_mut(&wasm_id) {
-                counter.connected(element);
+            if let Some(component) = store_map.get_mut(&wasm_id) {
+                component.connected(element);
             } else {
                 error!("Component id {} not found in connect.", wasm_id);
             }
@@ -102,22 +105,12 @@ fn store_name(struct_name: &Ident) -> String {
     store_name
 }
 
-fn counter_name(struct_name: &Ident) -> String {
-    let store = store_name(struct_name);
-    let id_counter_name = format!("{}{}", store, "_NEXT_ID");
-    id_counter_name
-}
-
 fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
-    // Generate:
-    // pub static THETHING_COMPONENTS_COUNTER (AtomicU32)
-    // pub static THETHING_COMPONENTS: RwLock<Option<HashMap<u32, Counter>>> = RwLock::new(None);
+    // Generate only the per-component store (HashMap) here.
     let store_name = store_name(&struct_name);
-    let id_counter_name = Ident::new(&counter_name(&struct_name), Span::call_site());
     let store_ident = Ident::new(&store_name, Span::call_site());
 
     let expanded = quote! {
-        pub static #id_counter_name: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
         pub static #store_ident: std::sync::RwLock<Option<std::collections::HashMap<u32, #struct_name>>> = std::sync::RwLock::new(None);
     };
 
@@ -142,14 +135,33 @@ fn from_pascal_to_snake(fn_name: &str) -> String {
     result
 }
 
-fn gen_rust_self(struct_name: Ident, js_name: Ident) -> proc_macro2::TokenStream {
-    let store_name = store_name(&struct_name);
-    let counter_name = counter_name(&struct_name);
+fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenStream {
+    let struct_ident = &struct_item.ident;
+    let store_name_str = store_name(struct_ident);
+    let store_ident = Ident::new(&store_name_str, Span::call_site());
 
-    let counter_ident = Ident::new(&counter_name, Span::call_site());
-    let store_ident = Ident::new(&store_name, Span::call_site());
+    // Check whether the struct has a named field called `value` so we can initialize it.
+    let mut has_value_field = false;
+    if let syn::Fields::Named(fields_named) = &struct_item.fields {
+        for field in fields_named.named.iter() {
+            if let Some(ident) = &field.ident {
+                if ident == "value" {
+                    has_value_field = true;
+                    break;
+                }
+            }
+        }
+    }
 
-    let struct_name_str = struct_name.to_string();
+    let set_value_ts = if has_value_field {
+        quote! {
+            counter.value = wasm_id as usize;
+        }
+    } else {
+        quote! {}
+    };
+
+    let struct_name_str = struct_ident.to_string();
     let rust_name = format!(
         "init_component_self_{}",
         from_pascal_to_snake(struct_name_str.as_str())
@@ -161,8 +173,10 @@ fn gen_rust_self(struct_name: Ident, js_name: Ident) -> proc_macro2::TokenStream
         #[allow(non_snake_case)]
         pub fn #rust_ident() -> u32 {  // init_component_state_struct_name, returns id for the instance of the element
             log!("Run counter init rs state.");
-            let counter = #struct_name::default();
-            let wasm_id = #counter_ident.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut counter = #struct_ident::default();
+            let wasm_id = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            #set_value_ts
 
             let mut store = #store_ident.write().expect("failed to acquire write lock");
 
@@ -201,32 +215,35 @@ fn create_class(
             log!("init component", component_name, tag_name);
 
             let js_init = String::from(
-                r#"
-                    let componentId = -1;
+                            r#"
+                                return class extends HTMLElement {
+                                    constructor() {
+                                        super();
+                                        this.__componentId = -1;
+                                    }
 
-                    return class extends HTMLElement {
-                        connectedCallback() {
-                            if (componentId == -1) {
-                                componentId = __INIT_CALLBACK();
-                            }
+                                    connectedCallback() {
+                                        if (this.__componentId === -1) {
+                                            this.__componentId = __INIT_CALLBACK();
+                                        }
 
-                            __ATTACH_CALLBACK(this, componentId);
-                        }
+                                        __ATTACH_CALLBACK(this, this.__componentId);
+                                    }
 
-                        disconnectedCallback() {
-                            //counterComponentDisconnect(this, componentId);
-                        }
+                                    disconnectedCallback() {
+                                        //counterComponentDisconnect(this, this.__componentId);
+                                    }
 
-                        attributeChangedCallback(name, oldValue, newValue) {
-                            //callbacks.attributeChanged(this, name, oldValue, newValue);
-                        }
+                                    attributeChangedCallback(name, oldValue, newValue) {
+                                        //callbacks.attributeChanged(this, name, oldValue, newValue);
+                                    }
 
-                        static get observedAttributes() {
-                            return [];
-                        }
-                    }
-            "#,
-            );
+                                    static get observedAttributes() {
+                                        return [];
+                                    }
+                                }
+                        "#,
+                        );
 
             let js_init_with_state = js_init.replace("__INIT_CALLBACK", #init_state_fn);
             let js_init_with_state = js_init_with_state.replace("__ATTACH_CALLBACK", #atach_state_fn);
