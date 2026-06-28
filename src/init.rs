@@ -54,7 +54,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         component_rs_state_js_fn.as_str(),
     );
 
-    let rs_state_init_fn = generate_default_component_rs_fn(
+    let rs_state_init_fn = gen_rust_self(
         component_rs_state_js_fn_ident,
         component_rs_state_rs_js_ident,
         struct_name_ident.clone(),
@@ -115,11 +115,7 @@ fn from_pascal_to_snake(fn_name: &str) -> String {
     result
 }
 
-fn generate_default_component_rs_fn(
-    rust_name: Ident,
-    js_name: Ident,
-    struct_name: Ident,
-) -> proc_macro2::TokenStream {
+fn gen_rust_self(rust_name: Ident, js_name: Ident, struct_name: Ident) -> proc_macro2::TokenStream {
     let store_name = store_name(&struct_name);
     let counter_name = counter_name(&struct_name);
 
