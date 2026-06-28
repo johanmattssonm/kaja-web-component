@@ -39,36 +39,28 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
 
     let global_store = generate_component_store(struct_name_ident.clone());
 
-    let create_html_component_fn_name = format!("createComponent{}", struct_name_ident);
-    let component_rs_state_js_fn = format!("initComponentState{}", struct_name_ident);
-    let attachjs_fn_name = format!("attachComponent{}", struct_name_ident);
+    let create_class_js = format!("createComponentClass{}", struct_name_ident);
+    let init_self_js = format!("initSelf{}", struct_name_ident);
+    let attach_js = format!("attachComponent{}", struct_name_ident);
 
-    let fn_create_ident = Ident::new(&create_html_component_fn_name, Span::call_site());
-    let component_rs_state_js_fn_ident = Ident::new(&component_rs_state_js_fn, Span::call_site());
+    let create_class_js_indent = Ident::new(&create_class_js, Span::call_site());
+    let init_self_js_ident = Ident::new(&init_self_js, Span::call_site());
 
-    let component_rs_state_rs_fn = from_pascal_to_snake(component_rs_state_js_fn.as_str());
-    let component_rs_state_rs_js_ident = Ident::new(&component_rs_state_rs_fn, Span::call_site());
-
-    let create_js_fn = generate_register_component_fn(
-        fn_create_ident,
+    let create_js_class_fn = create_class(
+        create_class_js_indent,
         tag_lit.clone(),
-        component_rs_state_js_fn.as_str(),
-        attachjs_fn_name.as_str(),
+        init_self_js.as_str(),
+        attach_js.as_str(),
     );
 
-    let rs_state_init_fn = gen_rust_self(
-        component_rs_state_rs_js_ident,
-        component_rs_state_js_fn_ident,
-        struct_name_ident.clone(),
-    );
-
-    let attach_fn = attach_quote(&attachjs_fn_name);
+    let rs_self = gen_rust_self(struct_name_ident.clone(), init_self_js_ident);
+    let attach_fn = attach_quote(&attach_js);
 
     let expanded = quote! {
         #global_store
-        #rs_state_init_fn
+        #rs_self
         #component_struct_item
-        #create_js_fn
+        #create_js_class_fn
         #attach_fn
     };
 
@@ -150,17 +142,24 @@ fn from_pascal_to_snake(fn_name: &str) -> String {
     result
 }
 
-fn gen_rust_self(rust_name: Ident, js_name: Ident, struct_name: Ident) -> proc_macro2::TokenStream {
+fn gen_rust_self(struct_name: Ident, js_name: Ident) -> proc_macro2::TokenStream {
     let store_name = store_name(&struct_name);
     let counter_name = counter_name(&struct_name);
 
     let counter_ident = Ident::new(&counter_name, Span::call_site());
     let store_ident = Ident::new(&store_name, Span::call_site());
 
+    let struct_name_str = struct_name.to_string();
+    let rust_name = format!(
+        "init_component_self_{}",
+        from_pascal_to_snake(struct_name_str.as_str())
+    );
+    let rust_ident = Ident::new(&rust_name, Span::call_site());
+
     let expanded = quote! {
         #[callback(#js_name)]
         #[allow(non_snake_case)]
-        pub fn #rust_name() -> u32 {  // init_component_state_struct_name, returns id for the instance of the element
+        pub fn #rust_ident() -> u32 {  // init_component_state_struct_name, returns id for the instance of the element
             log!("Run counter init rs state.");
             let counter = #struct_name::default();
             let wasm_id = #counter_ident.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -180,21 +179,21 @@ fn gen_rust_self(rust_name: Ident, js_name: Ident, struct_name: Ident) -> proc_m
     expanded
 }
 
-fn generate_register_component_fn(
-    name: Ident,
+fn create_class(
+    class_creator: Ident,
     tag: LitStr,
     init_state_fn: &str,
     atach_state_fn: &str,
 ) -> proc_macro2::TokenStream {
-    let name_str_lit = LitStr::new(&name.to_string(), Span::call_site());
+    let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
 
     let expanded = quote! {
         ::inventory::submit! {
-            InitComponentFn(#name)
+            InitComponentFn(#class_creator)
         }
 
         #[allow(non_snake_case)]
-        pub fn #name() { // createComponentTheStructName
+        pub fn #class_creator() { // createComponentTheStructName
             let wasm_id = 0;
 
             let component_name = #name_str_lit;
