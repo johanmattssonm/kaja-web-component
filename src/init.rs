@@ -40,9 +40,10 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let global_store = generate_component_store(struct_name_ident.clone());
 
     let create_html_component_fn_name = format!("createComponent{}", struct_name_ident);
-    let fn_create_ident = Ident::new(&create_html_component_fn_name, Span::call_site());
-
     let component_rs_state_js_fn = format!("initComponentState{}", struct_name_ident);
+    let attachjs_fn_name = format!("attachComponent{}", struct_name_ident);
+
+    let fn_create_ident = Ident::new(&create_html_component_fn_name, Span::call_site());
     let component_rs_state_js_fn_ident = Ident::new(&component_rs_state_js_fn, Span::call_site());
 
     let component_rs_state_rs_fn = from_pascal_to_snake(component_rs_state_js_fn.as_str());
@@ -52,22 +53,56 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         fn_create_ident,
         tag_lit.clone(),
         component_rs_state_js_fn.as_str(),
+        attachjs_fn_name.as_str(),
     );
 
     let rs_state_init_fn = gen_rust_self(
-        component_rs_state_js_fn_ident,
         component_rs_state_rs_js_ident,
+        component_rs_state_js_fn_ident,
         struct_name_ident.clone(),
     );
 
+    let attach_fn = attach_quote(&attachjs_fn_name);
+
     let expanded = quote! {
         #global_store
+        #rs_state_init_fn
         #component_struct_item
         #create_js_fn
-        #rs_state_init_fn
+        #attach_fn
     };
 
     expanded.into()
+}
+
+fn attach_quote(atach_state_js_fn: &str) -> proc_macro2::TokenStream {
+    let js_callback_ident = Ident::new(atach_state_js_fn, Span::call_site());
+    let rs_name_str = from_pascal_to_snake(atach_state_js_fn);
+    let rs_name_ident = Ident::new(&rs_name_str, Span::call_site());
+
+    let expanded = quote! {
+        #[callback(#js_callback_ident)]
+        fn #rs_name_ident(element: HtmlElement, wasm_id: u32) {
+            gloo::console::log!("counterComponentConnect generated but hard coded wasm_id: {}", wasm_id);
+
+            let mut store = COUNTER_COMPONENTS.write().unwrap();
+
+            if store.is_none() {
+                error!("Component not found in connect.");
+                return;
+            }
+
+            let store_map = store.as_mut().unwrap();
+
+            if let Some(counter) = store_map.get_mut(&wasm_id) {
+                counter.connected(element);
+            } else {
+                error!("Component id {} not found in connect.", wasm_id);
+            }
+        }
+    };
+
+    expanded
 }
 
 fn store_name(struct_name: &Ident) -> String {
@@ -123,7 +158,7 @@ fn gen_rust_self(rust_name: Ident, js_name: Ident, struct_name: Ident) -> proc_m
     let store_ident = Ident::new(&store_name, Span::call_site());
 
     let expanded = quote! {
-        #[callback(#js_name)] // initComponentStateStructName
+        #[callback(#js_name)]
         #[allow(non_snake_case)]
         pub fn #rust_name() -> u32 {  // init_component_state_struct_name, returns id for the instance of the element
             log!("Run counter init rs state.");
@@ -149,12 +184,13 @@ fn generate_register_component_fn(
     name: Ident,
     tag: LitStr,
     init_state_fn: &str,
+    atach_state_fn: &str,
 ) -> proc_macro2::TokenStream {
     let name_str_lit = LitStr::new(&name.to_string(), Span::call_site());
 
     let expanded = quote! {
         ::inventory::submit! {
-            InitFn(#name)
+            InitComponentFn(#name)
         }
 
         #[allow(non_snake_case)]
@@ -172,14 +208,14 @@ fn generate_register_component_fn(
                     return class extends HTMLElement {
                         connectedCallback() {
                             if (componentId == -1) {
-                                componentId = __INIT_CALLBACK;
+                                componentId = __INIT_CALLBACK();
                             }
 
-                            counterComponentConnect(this, componentId);
+                            __ATTACH_CALLBACK(this, componentId);
                         }
 
                         disconnectedCallback() {
-                            counterComponentDisconnect(this, componentId);
+                            //counterComponentDisconnect(this, componentId);
                         }
 
                         attributeChangedCallback(name, oldValue, newValue) {
@@ -194,6 +230,8 @@ fn generate_register_component_fn(
             );
 
             let js_init_with_state = js_init.replace("__INIT_CALLBACK", #init_state_fn);
+            let js_init_with_state = js_init_with_state.replace("__ATTACH_CALLBACK", #atach_state_fn);
+
             let component = js_sys::Function::new_no_args(js_init_with_state.as_str());
 
             let class = component.call0(&JsValue::NULL);
