@@ -43,6 +43,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let init_self_js = format!("initSelf{}", struct_name_ident);
     let attach_js = format!("attachComponent{}", struct_name_ident);
     let detach_js = format!("detachComponent{}", struct_name_ident);
+    let observed_js = format!("observedComponentAttribute{}", struct_name_ident);
 
     let create_class_js_indent = Ident::new(&create_class_js, Span::call_site());
     let init_self_js_ident = Ident::new(&init_self_js, Span::call_site());
@@ -53,11 +54,13 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         init_self_js.as_str(),
         attach_js.as_str(),
         detach_js.as_str(),
+        observed_js.as_str(),
     );
 
     let rs_self = gen_rust_self(component_struct_item.clone(), init_self_js_ident);
     let attach_fn = attach_quote(&attach_js, struct_name_ident);
     let detach_fn = detach_quote(&detach_js, struct_name_ident);
+    let observed_fn = observed_quote(&observed_js, struct_name_ident);
 
     let expanded = quote! {
         #global_store
@@ -131,6 +134,37 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
             }
 
             store_map.remove(wasm_id);
+        }
+    };
+
+    expanded
+}
+
+fn observed_quote(observed_js_fn: &str, struct_name: &Ident) -> proc_macro2::TokenStream {
+    let js_callback_ident = Ident::new(observed_js_fn, Span::call_site());
+    let rs_name_str = from_pascal_to_snake(observed_js_fn);
+    let rs_name_ident = Ident::new(&rs_name_str, Span::call_site());
+
+    let store_name_str = store_name(struct_name);
+    let store_ident = Ident::new(&store_name_str, Span::call_site());
+
+    let expanded = quote! {
+        #[callback(#js_callback_ident)]
+        fn #rs_name_ident(element: HtmlElement, wasm_id: u32) {
+            let mut store = #store_ident.write().unwrap();
+
+            if store.is_none() {
+                error!("Component not found in connect.");
+                return;
+            }
+
+            let store_map = store.as_mut().unwrap();
+
+            if let Some(component) = store_map.get_mut(&wasm_id) {
+                component.observed_attributes(element);
+            } else {
+                error!("Component id {} not found in observed attributes.", wasm_id);
+            }
         }
     };
 
@@ -211,6 +245,7 @@ fn create_class(
     init_self_fn: &str,
     attach_state_fn: &str,
     detach_state_fn: &str,
+    observed_fn: &str,
 ) -> proc_macro2::TokenStream {
     let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
 
@@ -252,7 +287,7 @@ fn create_class(
                         }
 
                         static get observedAttributes() {
-                            return [];
+                            return __OBSERVED_CALLBACK(this, this.componentId);;
                         }
                     }
             "#,
@@ -261,6 +296,7 @@ fn create_class(
                 let js_init_with_state = js_init.replace("__INIT_CALLBACK", #init_self_fn);
                 let js_init_with_state = js_init_with_state.replace("__ATTACH_CALLBACK", #attach_state_fn);
                 let js_init_with_state = js_init_with_state.replace("__DETACH_CALLBACK", #detach_state_fn);
+                let js_init_with_state = js_init_with_state.replace("__OBSERVED_CALLBACK", #observed_fn);
     t
                 let component = js_sys::Function::new_no_args(js_init_with_state.as_str());
 
