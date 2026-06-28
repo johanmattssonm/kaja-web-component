@@ -254,19 +254,19 @@ fn create_class(
                     return class extends HTMLElement {
                         constructor() {
                             super();
-                            this.componentId = -1;
+                            this.kajaComponentId = -1;
                         }
 
                         connectedCallback() {
-                            if (this.componentId === -1) {
-                                this.componentId = __INIT_CALLBACK();
+                            if (this.kajaComponentId === -1) {
+                                this.kajaComponentId = __INIT_CALLBACK();
                             }
 
-                            __ATTACH_CALLBACK(this, this.componentId);
+                            __ATTACH_CALLBACK(this, this.kajaComponentId);
                         }
 
                         disconnectedCallback() {
-                            __DETACH_CALLBACK(this, this.componentId);
+                            __DETACH_CALLBACK(this, this.kajaComponentId);
                         }
 
                         attributeChangedCallback(name, oldValue, newValue) {
