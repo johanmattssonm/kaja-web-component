@@ -42,6 +42,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let create_class_js = format!("createComponentClass{}", struct_name_ident);
     let init_self_js = format!("initSelf{}", struct_name_ident);
     let attach_js = format!("attachComponent{}", struct_name_ident);
+    let detach_js = format!("detachComponent{}", struct_name_ident);
 
     let create_class_js_indent = Ident::new(&create_class_js, Span::call_site());
     let init_self_js_ident = Ident::new(&init_self_js, Span::call_site());
@@ -51,10 +52,12 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         tag_lit.clone(),
         init_self_js.as_str(),
         attach_js.as_str(),
+        detach_js.as_str(),
     );
 
     let rs_self = gen_rust_self(component_struct_item.clone(), init_self_js_ident);
     let attach_fn = attach_quote(&attach_js, struct_name_ident);
+    let detach_fn = detach_quote(&detach_js, struct_name_ident);
 
     let expanded = quote! {
         #global_store
@@ -62,6 +65,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         #component_struct_item
         #create_js_class_fn
         #attach_fn
+        #detach_fn
     };
 
     expanded.into()
@@ -94,6 +98,39 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
             } else {
                 error!("Component id {} not found in connect.", wasm_id);
             }
+        }
+    };
+
+    expanded
+}
+
+fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::TokenStream {
+    let js_callback_ident = Ident::new(detach_state_js_fn, Span::call_site());
+    let rs_name_str = from_pascal_to_snake(detach_state_js_fn);
+    let rs_name_ident = Ident::new(&rs_name_str, Span::call_site());
+
+    let store_name_str = store_name(struct_name);
+    let store_ident = Ident::new(&store_name_str, Span::call_site());
+
+    let expanded = quote! {
+        #[callback(#js_callback_ident)]
+        fn #rs_name_ident(element: HtmlElement, wasm_id: u32) {
+            let mut store = #store_ident.write().unwrap();
+
+            if store.is_none() {
+                error!("Component not found in connect.");
+                return;
+            }
+
+            let store_map = store.as_mut().unwrap();
+
+            if let Some(component) = store_map.get_mut(&wasm_id) {
+                component.disconnected(element);
+            } else {
+                error!("Component id {} not found in disconnected.", wasm_id);
+            }
+
+            store_map.remove(wasm_id);
         }
     };
 
@@ -140,27 +177,6 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
     let store_name_str = store_name(struct_ident);
     let store_ident = Ident::new(&store_name_str, Span::call_site());
 
-    // Check whether the struct has a named field called `value` so we can initialize it.
-    let mut has_value_field = false;
-    if let syn::Fields::Named(fields_named) = &struct_item.fields {
-        for field in fields_named.named.iter() {
-            if let Some(ident) = &field.ident {
-                if ident == "value" {
-                    has_value_field = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    let set_value_ts = if has_value_field {
-        quote! {
-            counter.value = wasm_id as usize;
-        }
-    } else {
-        quote! {}
-    };
-
     let struct_name_str = struct_ident.to_string();
     let rust_name = format!(
         "init_component_self_{}",
@@ -174,11 +190,7 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
         pub fn #rust_ident() -> u32 {  // init_component_state_struct_name, returns id for the instance of the element
             log!("Run counter init rs state.");
             let mut counter = #struct_ident::default();
-            let wasm_id = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-            #set_value_ts
-
-            let mut store = #store_ident.write().expect("failed to acquire write lock");
+            let wasm_id = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);            let mut store = #store_ident.write().expect("failed to acquire write lock");
 
             if store.is_none() {
                 *store = Some(std::collections::HashMap::new());
@@ -196,77 +208,79 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
 fn create_class(
     class_creator: Ident,
     tag: LitStr,
-    init_state_fn: &str,
-    atach_state_fn: &str,
+    init_self_fn: &str,
+    attach_state_fn: &str,
+    detach_state_fn: &str,
 ) -> proc_macro2::TokenStream {
     let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
 
     let expanded = quote! {
-        ::inventory::submit! {
-            InitComponentFn(#class_creator)
-        }
-
-        #[allow(non_snake_case)]
-        pub fn #class_creator() { // createComponentTheStructName
-            let wasm_id = 0;
-
-            let component_name = #name_str_lit;
-            let tag_name = #tag;
-            log!("init component", component_name, tag_name);
-
-            let js_init = String::from(
-                            r#"
-                                return class extends HTMLElement {
-                                    constructor() {
-                                        super();
-                                        this.__componentId = -1;
-                                    }
-
-                                    connectedCallback() {
-                                        if (this.__componentId === -1) {
-                                            this.__componentId = __INIT_CALLBACK();
-                                        }
-
-                                        __ATTACH_CALLBACK(this, this.__componentId);
-                                    }
-
-                                    disconnectedCallback() {
-                                        //counterComponentDisconnect(this, this.__componentId);
-                                    }
-
-                                    attributeChangedCallback(name, oldValue, newValue) {
-                                        //callbacks.attributeChanged(this, name, oldValue, newValue);
-                                    }
-
-                                    static get observedAttributes() {
-                                        return [];
-                                    }
-                                }
-                        "#,
-                        );
-
-            let js_init_with_state = js_init.replace("__INIT_CALLBACK", #init_state_fn);
-            let js_init_with_state = js_init_with_state.replace("__ATTACH_CALLBACK", #atach_state_fn);
-
-            let component = js_sys::Function::new_no_args(js_init_with_state.as_str());
-
-            let class = component.call0(&JsValue::NULL);
-
-            if class.is_err() {
-                error!("Failed to register class for {}", #tag);
-                return;
+            ::inventory::submit! {
+                InitComponentFn(#class_creator)
             }
 
-            let class_fn = class.unwrap();
-            let registry = web_sys::window().unwrap().custom_elements();
+            #[allow(non_snake_case)]
+            pub fn #class_creator() { // createComponentTheStructName
+                let wasm_id = 0;
 
-            let result = registry.define(#tag, &class_fn.unchecked_into());
+                let component_name = #name_str_lit;
+                let tag_name = #tag;
+                log!("init component", component_name, tag_name);
 
-            if result.is_err() {
-                error!("Failed to register component {}", #tag);
+                let js_init = String::from(
+                    r#"
+                    return class extends HTMLElement {
+                        constructor() {
+                            super();
+                            this.componentId = -1;
+                        }
+
+                        connectedCallback() {
+                            if (this.componentId === -1) {
+                                this.componentId = __INIT_CALLBACK();
+                            }
+
+                            __ATTACH_CALLBACK(this, this.componentId);
+                        }
+
+                        disconnectedCallback() {
+                            __DETACH_CALLBACK(this, this.componentId);
+                        }
+
+                        attributeChangedCallback(name, oldValue, newValue) {
+                            //callbacks.attributeChanged(this, name, oldValue, newValue);
+                        }
+
+                        static get observedAttributes() {
+                            return [];
+                        }
+                    }
+            "#,
+                );
+
+                let js_init_with_state = js_init.replace("__INIT_CALLBACK", #init_self_fn);
+                let js_init_with_state = js_init_with_state.replace("__ATTACH_CALLBACK", #attach_state_fn);
+                let js_init_with_state = js_init_with_state.replace("__DETACH_CALLBACK", #detach_state_fn);
+    t
+                let component = js_sys::Function::new_no_args(js_init_with_state.as_str());
+
+                let class = component.call0(&JsValue::NULL);
+
+                if class.is_err() {
+                    error!("Failed to register class for {}", #tag);
+                    return;
+                }
+
+                let class_fn = class.unwrap();
+                let registry = web_sys::window().unwrap().custom_elements();
+
+                let result = registry.define(#tag, &class_fn.unchecked_into());
+
+                if result.is_err() {
+                    error!("Failed to register component {}", #tag);
+                }
             }
-        }
-    };
+        };
 
     expanded
 }
