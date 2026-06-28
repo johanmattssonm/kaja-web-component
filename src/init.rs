@@ -63,8 +63,8 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let expanded = quote! {
         #global_store
         #component_struct_item
-        #rs_state_init_fn
         #create_js_fn
+        #rs_state_init_fn
     };
 
     expanded.into()
@@ -91,7 +91,7 @@ fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
 
     let expanded = quote! {
         pub static #id_counter_name: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
-        pub static #store_ident: std::sync::RwLock<Option<HashMap<u32, #struct_name>>> = std::sync::RwLock::new(None);
+        pub static #store_ident: std::sync::RwLock<Option<std::collections::HashMap<u32, #struct_name>>> = std::sync::RwLock::new(None);
     };
 
     expanded
@@ -134,7 +134,7 @@ fn generate_default_component_rs_fn(
             let mut store = #store_name.write();
 
             if store.is_none() {
-                *store = Some(HashMap::new());
+                *store = Some(std::collections::HashMap::new());
             }
 
             let store_instance = *store.unwrap();
