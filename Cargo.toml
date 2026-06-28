@@ -1,0 +1,19 @@
+[package]
+name = "kaja-web-component"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+gloo = "0.12.0"
+wasm-bindgen = "0.2.122"
+js-sys = "0.3"
+web-sys = { version = "0.3.99", features = ["Window", "HtmlElement", "CustomElementRegistry", "ElementDefinitionOptions"] }
+
+[patch.crates-io]
+kaja-callback-macro = { path = "../kaja-callback-macro" }
