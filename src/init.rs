@@ -67,8 +67,9 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         #rs_self
         #component_struct_item
         #create_js_class_fn
-        #attach_fn
-        #detach_fn
+                #attach_fn
+                #detach_fn
+                #observed_fn
     };
 
     expanded.into()
@@ -133,7 +134,7 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
                 error!("Component id {} not found in disconnected.", wasm_id);
             }
 
-            store_map.remove(wasm_id);
+            store_map.remove(&wasm_id);
         }
     };
 
@@ -148,22 +149,25 @@ fn observed_quote(observed_js_fn: &str, struct_name: &Ident) -> proc_macro2::Tok
     let store_name_str = store_name(struct_name);
     let store_ident = Ident::new(&store_name_str, Span::call_site());
 
+    let struct_ident = struct_name;
+
     let expanded = quote! {
         #[callback(#js_callback_ident)]
-        fn #rs_name_ident(element: HtmlElement, wasm_id: u32) {
+        fn #rs_name_ident(element: HtmlElement, wasm_id: u32) -> &'static [&'static str] {
             let mut store = #store_ident.write().unwrap();
 
             if store.is_none() {
                 error!("Component not found in connect.");
-                return;
+                return &[];
             }
 
             let store_map = store.as_mut().unwrap();
 
-            if let Some(component) = store_map.get_mut(&wasm_id) {
-                component.observed_attributes(element);
+            if let Some(_component) = store_map.get_mut(&wasm_id) {
+                #struct_ident::observed_attributes(element)
             } else {
                 error!("Component id {} not found in observed attributes.", wasm_id);
+                &[]
             }
         }
     };
@@ -250,20 +254,20 @@ fn create_class(
     let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
 
     let expanded = quote! {
-            ::inventory::submit! {
-                InitComponentFn(#class_creator)
-            }
+        ::inventory::submit! {
+            InitComponentFn(#class_creator)
+        }
 
-            #[allow(non_snake_case)]
-            pub fn #class_creator() { // createComponentTheStructName
-                let wasm_id = 0;
+        #[allow(non_snake_case)]
+        pub fn #class_creator() { // createComponentTheStructName
+            let wasm_id = 0;
 
-                let component_name = #name_str_lit;
-                let tag_name = #tag;
-                log!("init component", component_name, tag_name);
+            let component_name = #name_str_lit;
+            let tag_name = #tag;
+            log!("init component", component_name, tag_name);
 
-                let js_init = String::from(
-                    r#"
+            let js_init = String::from(
+                r#"
                     return class extends HTMLElement {
                         constructor() {
                             super();
@@ -291,32 +295,32 @@ fn create_class(
                         }
                     }
             "#,
-                );
+            );
 
-                let js_init_with_state = js_init.replace("__INIT_CALLBACK", #init_self_fn);
-                let js_init_with_state = js_init_with_state.replace("__ATTACH_CALLBACK", #attach_state_fn);
-                let js_init_with_state = js_init_with_state.replace("__DETACH_CALLBACK", #detach_state_fn);
-                let js_init_with_state = js_init_with_state.replace("__OBSERVED_CALLBACK", #observed_fn);
-    t
-                let component = js_sys::Function::new_no_args(js_init_with_state.as_str());
+            let js_init_with_state = js_init.replace("__INIT_CALLBACK", #init_self_fn);
+            let js_init_with_state = js_init_with_state.replace("__ATTACH_CALLBACK", #attach_state_fn);
+            let js_init_with_state = js_init_with_state.replace("__DETACH_CALLBACK", #detach_state_fn);
+            let js_init_with_state = js_init_with_state.replace("__OBSERVED_CALLBACK", #observed_fn);
 
-                let class = component.call0(&JsValue::NULL);
+            let component = js_sys::Function::new_no_args(js_init_with_state.as_str());
 
-                if class.is_err() {
-                    error!("Failed to register class for {}", #tag);
-                    return;
-                }
+            let class = component.call0(&JsValue::NULL);
 
-                let class_fn = class.unwrap();
-                let registry = web_sys::window().unwrap().custom_elements();
-
-                let result = registry.define(#tag, &class_fn.unchecked_into());
-
-                if result.is_err() {
-                    error!("Failed to register component {}", #tag);
-                }
+            if class.is_err() {
+                error!("Failed to register class for {}", #tag);
+                return;
             }
-        };
+
+            let class_fn = class.unwrap();
+            let registry = web_sys::window().unwrap().custom_elements();
+
+            let result = registry.define(#tag, &class_fn.unchecked_into());
+
+            if result.is_err() {
+                error!("Failed to register component {}", #tag);
+            }
+        }
+    };
 
     expanded
 }
