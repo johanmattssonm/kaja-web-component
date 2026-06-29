@@ -65,8 +65,10 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let observed_fn = observed_quote(&observed_js, struct_name_ident);
     let changed_fn = changed_quote(&changed_js, struct_name_ident);
     let self_from_id = component_from_id(component_struct_item.clone());
+    let component_id_counter = component_counter();
 
     let expanded = quote! {
+        #component_id_counter
         #global_store
         #rs_self
         #component_struct_item
@@ -78,7 +80,10 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         #changed_fn
     };
 
-    expanded.into()
+    ex
+
+
+    panded.into()
 }
 
 fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::TokenStream {
@@ -251,19 +256,32 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
     let store_ident = Ident::new(&store_name_str, Span::call_site());
 
     let struct_name_str = struct_ident.to_string();
+    let var_name_str = from_pascal_to_snake(struct_name_str.as_str());
+    let var_ident = Ident::new(&var_name_str, Span::call_site());
+
     let rust_name = format!(
         "init_component_self_{}",
         from_pascal_to_snake(struct_name_str.as_str())
     );
     let rust_ident = Ident::new(&rust_name, Span::call_site());
 
+    let log_msg = LitStr::new(
+        &format!("Run {} init rs state.", struct_name_str),
+        Span::call_site(),
+    );
+
     let expanded = quote! {
         #[callback(#js_name)]
         #[allow(non_snake_case)]
         pub fn #rust_ident() -> String {  // init_component_state_struct_name, returns id for the instance of the element
-            log!("Run counter init rs state.");
-            let mut counter = #struct_ident::default();
-            let wasm_id = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);            let mut store = #store_ident.write().expect("failed to acquire write lock");
+            gloo::console::log!(#log_msg);
+
+            let mut #var_ident = #struct_ident::default();
+            let wasm_id = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            let mut store = #store_ident
+                .write()
+                .expect("failed to acquire write lock");
 
             if store.is_none() {
                 *store = Some(std::collections::HashMap::new());
@@ -271,8 +289,22 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
 
             let key = wasm_id.to_string();
             let store_map = store.as_mut().unwrap();
-            store_map.insert(key.clone(), counter);
+            store_map.insert(key.clone(), #var_ident);
             key
+        }
+    };
+
+    expanded
+}
+
+fn component_counter() -> proc_macro2::TokenStream {
+    let expanded = quote! {
+        #[callback(nextComponentId)]
+        pub fn next_component_id() -> String {
+            let wasm_id = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let next_id = wasm_id.to_string();
+            log!("Next ID", next_id);
+            next_id
         }
     };
 
@@ -308,18 +340,12 @@ fn create_class(
                     return class extends HTMLElement {
                         constructor() {
                             super();
-                            this.setAttribute("componentid", "-1");
+                            let componentId = nextComponentId();
+                            this.setAttribute("componentid", componentId);
                         }
 
                         connectedCallback() {
                             let componentid = this.getAttribute("componentid");
-
-                            if (componentid === "-1") {
-                                let id = __INIT_CALLBACK();
-                                this.setAttribute("componentid", id);
-                                componentid = id;
-                            }
-
                             __ATTACH_CALLBACK(this, componentid);
                         }
 
