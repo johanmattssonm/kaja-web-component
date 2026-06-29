@@ -57,6 +57,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         detach_js.as_str(),
         observed_js.as_str(),
         changed_js.as_str(),
+        struct_name_ident,
     );
 
     let rs_self = gen_rust_self(component_struct_item.clone(), init_self_js_ident);
@@ -108,7 +109,7 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
             if let Some(component) = store_map.get_mut(&wasm_id) {
                 component.connected(element);
             } else {
-                error!("Component id {} not found in connect.", wasm_id.clone());
+                error!("Component id not found in connect.", wasm_id.clone());
             }
         }
     };
@@ -139,7 +140,7 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
             if let Some(component) = store_map.get_mut(&wasm_id) {
                 component.disconnected(element);
             } else {
-                error!("Component id {} not found in disconnected.", wasm_id.clone());
+                error!("Component id not found in disconnected.", wasm_id.clone());
             }
 
             store_map.remove(&wasm_id);
@@ -175,7 +176,7 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
                 let new_value = ::wasm_bindgen::JsValue::from_str(&to);
                 component.attribute_changed(element, name, &old_value, &new_value);
             } else {
-                error!("Component id {} not found in changed attribute.", wasm_id.clone());
+                error!("Component id not found in changed attribute.", wasm_id.clone());
             }
         }
     };
@@ -281,7 +282,8 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
                 .expect("failed to acquire write lock");
 
             if store.is_none() {
-                *store = Some(std::collections::HashMap::new());
+                error!("No store in self init.");
+                return "".to_string();
             }
 
             let key = wasm_id.to_string();
@@ -316,17 +318,33 @@ fn create_class(
     detach_state_fn: &str,
     observed_fn: &str,
     change_fn: &str,
+    struct_name: &Ident,
 ) -> proc_macro2::TokenStream {
     let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
+    let store_name_str = store_name(&struct_name);
+    let store_ident = Ident::new(&store_name_str, Span::call_site());
 
     let expanded = quote! {
         ::inventory::submit! {
             InitComponentFn(#class_creator)
         }
 
+        fn init_store() {
+            let mut store = #store_ident
+                .write()
+                .expect("failed to acquire write lock");
+
+            log!("Check if store is initialized.");
+
+            if store.is_none() {
+                log!("Init store");
+                *store = Some(std::collections::HashMap::new());
+            }
+        }
+
         #[allow(non_snake_case)]
         pub fn #class_creator() { // createComponentTheStructName
-            let wasm_id = 0;
+            init_store();
 
             let component_name = #name_str_lit;
             let tag_name = #tag;
