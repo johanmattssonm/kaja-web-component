@@ -65,7 +65,6 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let detach_fn = detach_quote(&detach_js, struct_name_ident);
     let observed_fn = observed_quote(&observed_js, struct_name_ident);
     let changed_fn = changed_quote(&changed_js, struct_name_ident);
-    let self_from_id = component_from_id(component_struct_item.clone());
 
     let expanded = quote! {
         #global_store
@@ -75,7 +74,6 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         #attach_fn
         #detach_fn
         #observed_fn
-        #self_from_id
         #changed_fn
     };
 
@@ -234,18 +232,6 @@ fn from_pascal_to_snake(fn_name: &str) -> String {
     result
 }
 
-fn component_from_id(struct_item: ItemStruct) -> proc_macro2::TokenStream {
-    let struct_ident = &struct_item.ident;
-    let expanded = quote! {
-        pub fn get_counter() -> #struct_ident {  // returns an instance of the component
-            log!("Get counter");
-            #struct_ident::default()
-        }
-    };
-
-    expanded
-}
-
 fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenStream {
     let struct_ident = &struct_item.ident;
     let store_name_str = store_name(struct_ident);
@@ -310,13 +296,18 @@ fn create_class(
     let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
     let store_name_str = store_name(&struct_name);
     let store_ident = Ident::new(&store_name_str, Span::call_site());
+    let init_store_fn = format!(
+        "init_store_{}",
+        from_pascal_to_snake(struct_name.to_string().as_str())
+    );
+    let init_store_ident = Ident::new(&init_store_fn, Span::call_site());
 
     let expanded = quote! {
         ::inventory::submit! {
             InitComponentFn(#class_creator)
         }
 
-        fn init_store() {
+        fn #init_store_ident() {
             let mut store = #store_ident
                 .write()
                 .expect("failed to acquire write lock");
@@ -331,9 +322,9 @@ fn create_class(
 
         #[allow(non_snake_case)]
         pub fn #class_creator() { // createComponentTheStructName
-            init_store();
+        #init_store_ident();
 
-            let component_name = #name_str_lit;
+        let component_name = #name_str_lit;
             let tag_name = #tag;
 
             log!("init component", component_name, tag_name);
