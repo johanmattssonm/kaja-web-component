@@ -308,30 +308,30 @@ fn create_class(
                     return class extends HTMLElement {
                         constructor() {
                             super();
-                            this.setAttribute("componentId", "-1");
+                            this.setAttribute("componentid", "-1");
                         }
 
                         connectedCallback() {
-                            let componentId = this.getAttribute("componentId");
+                            let componentid = this.getAttribute("componentid");
 
-                            if (componentId === "-1") {
+                            if (componentid === "-1") {
                                 let id = __INIT_CALLBACK();
-                                this.setAttribute("componentId", id);
-                                componentId = id;
+                                this.setAttribute("componentid", id);
+                                componentid = id;
                             }
 
-                            __ATTACH_CALLBACK(this, componentId);
+                            __ATTACH_CALLBACK(this, componentid);
                         }
 
                         disconnectedCallback() {
-                            let componentId = this.getAttribute("componentId");
-                            __DETACH_CALLBACK(this, componentId);
+                            let componentid = this.getAttribute("componentid");
+                            __DETACH_CALLBACK(this, componentid);
                         }
 
                         attributeChangedCallback(name, oldValue, newValue) {
-                            let componentId = this.getAttribute("componentId");
-                            console.log(componentId, name, oldValue, newValue);
-                            __ATTRIBUTE_CHANGED_CALLBACK(this, componentId, name, oldValue === null ? "" : String(oldValue), newValue === null ? "" : String(newValue));
+                            let componentid = this.getAttribute("componentid");
+                            console.log(componentid, name, oldValue, newValue);
+                            __ATTRIBUTE_CHANGED_CALLBACK(this, componentid, name, oldValue === null ? "" : String(oldValue), newValue === null ? "" : String(newValue));
                         }
 
                         static get observedAttributes() {
