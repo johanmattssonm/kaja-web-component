@@ -66,11 +66,9 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let observed_fn = observed_quote(&observed_js, struct_name_ident);
     let changed_fn = changed_quote(&changed_js, struct_name_ident);
     let self_from_id = component_from_id(component_struct_item.clone());
-    let component_id_counter = component_counter();
 
     let expanded = quote! {
         #global_store
-        #component_id_counter
         #rs_self
         #component_struct_item
         #create_js_class_fn
@@ -264,7 +262,10 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
     let rust_ident = Ident::new(&rust_name, Span::call_site());
 
     let log_msg = LitStr::new(
-        &format!("Run {} init rs state.", struct_name_str),
+        &format!(
+            "Run {} init rs state. Init self for struct.",
+            struct_name_str
+        ),
         Span::call_site(),
     );
 
@@ -296,20 +297,6 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
     expanded
 }
 
-fn component_counter() -> proc_macro2::TokenStream {
-    let expanded = quote! {
-        #[callback(nextComponentId)]
-        pub fn next_component_id() -> String {
-            let wasm_id = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let next_id = wasm_id.to_string();
-            log!("Next ID", next_id.clone());
-            next_id
-        }
-    };
-
-    expanded
-}
-
 fn create_class(
     class_creator: Ident,
     tag: LitStr,
@@ -323,6 +310,14 @@ fn create_class(
     let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
     let store_name_str = store_name(&struct_name);
     let store_ident = Ident::new(&store_name_str, Span::call_site());
+
+    // compute the rust init function ident that gen_rust_self creates, e.g. `init_component_self_counter`
+    let struct_name_str = struct_name.to_string();
+    let rust_call_name = format!(
+        "init_component_self_{}",
+        from_pascal_to_snake(&struct_name_str)
+    );
+    let rust_call_ident = Ident::new(&rust_call_name, Span::call_site());
 
     let expanded = quote! {
         ::inventory::submit! {
@@ -346,8 +341,10 @@ fn create_class(
         pub fn #class_creator() { // createComponentTheStructName
             init_store();
 
+            let component_id = #rust_call_ident();
             let component_name = #name_str_lit;
             let tag_name = #tag;
+
             log!("init component", component_name, tag_name);
 
             let js_init = String::from(
@@ -355,8 +352,9 @@ fn create_class(
                     return class extends HTMLElement {
                         constructor() {
                             super();
-                            let componentId = nextComponentId();
+                            let componentId = __COMPONENT_ID;
                             this.setAttribute("componentid", componentId);
+                            console.log("created class " + componentId);
                         }
 
                         connectedCallback() {
@@ -387,6 +385,7 @@ fn create_class(
             let js_init_with_state = js_init_with_state.replace("__DETACH_CALLBACK", #detach_state_fn);
             let js_init_with_state = js_init_with_state.replace("__ATTRIBUTE_CHANGED_CALLBACK", #change_fn);
             let js_init_with_state = js_init_with_state.replace("__OBSERVED_CALLBACK", #observed_fn);
+            let js_init_with_state = js_init_with_state.replace("__COMPONENT_ID", &component_id);
 
             let component = js_sys::Function::new_no_args(js_init_with_state.as_str());
 
