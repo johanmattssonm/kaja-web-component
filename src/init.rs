@@ -311,14 +311,6 @@ fn create_class(
     let store_name_str = store_name(&struct_name);
     let store_ident = Ident::new(&store_name_str, Span::call_site());
 
-    // compute the rust init function ident that gen_rust_self creates, e.g. `init_component_self_counter`
-    let struct_name_str = struct_name.to_string();
-    let rust_call_name = format!(
-        "init_component_self_{}",
-        from_pascal_to_snake(&struct_name_str)
-    );
-    let rust_call_ident = Ident::new(&rust_call_name, Span::call_site());
-
     let expanded = quote! {
         ::inventory::submit! {
             InitComponentFn(#class_creator)
@@ -341,7 +333,6 @@ fn create_class(
         pub fn #class_creator() { // createComponentTheStructName
             init_store();
 
-            let component_id = #rust_call_ident();
             let component_name = #name_str_lit;
             let tag_name = #tag;
 
@@ -352,7 +343,7 @@ fn create_class(
                     return class extends HTMLElement {
                         constructor() {
                             super();
-                            let componentId = __COMPONENT_ID;
+                            let componentId = __INIT_SELF_CALLBACK();
                             this.setAttribute("componentid", componentId);
                             console.log("created class " + componentId);
                         }
@@ -380,12 +371,11 @@ fn create_class(
             "#,
             );
 
-            let js_init_with_state = js_init.replace("__INIT_CALLBACK", #init_self_fn);
+            let js_init_with_state = js_init.replace("__INIT_SELF_CALLBACK", #init_self_fn);
             let js_init_with_state = js_init_with_state.replace("__ATTACH_CALLBACK", #attach_state_fn);
             let js_init_with_state = js_init_with_state.replace("__DETACH_CALLBACK", #detach_state_fn);
             let js_init_with_state = js_init_with_state.replace("__ATTRIBUTE_CHANGED_CALLBACK", #change_fn);
             let js_init_with_state = js_init_with_state.replace("__OBSERVED_CALLBACK", #observed_fn);
-            let js_init_with_state = js_init_with_state.replace("__COMPONENT_ID", &component_id);
 
             let component = js_sys::Function::new_no_args(js_init_with_state.as_str());
 
