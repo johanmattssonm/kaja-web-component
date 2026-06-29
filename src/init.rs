@@ -86,7 +86,7 @@ fn storage_for_struct_impl(struct_name: &Ident) -> proc_macro2::TokenStream {
 
     let expanded = quote! {
         impl ComponentStorage for #struct_name {
-            fn storage() -> &'static RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<Self>>>>> {
+            fn storage() -> &'static RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::RwLock<Self>>>>> {
                 &#store_ident
             }
         }
@@ -118,11 +118,11 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
             let store_map = store.as_ref().unwrap();
 
             if let Some(component_arc) = store_map.get(&wasm_id) {
-                let mut component = component_arc.lock().unwrap();
-                component.connected(element);
-            } else {
-                error!("Component id not found in connect.", wasm_id.clone());
-            }
+                            let mut component = component_arc.write().unwrap();
+                            component.connected(element);
+                        } else {
+                            error!("Component id not found in connect.", wasm_id.clone());
+                        }
         }
     };
 
@@ -150,13 +150,13 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
             let store_map = store.as_mut().unwrap();
 
             if let Some(component_arc) = store_map.get(&wasm_id) {
-                let mut component = component_arc.lock().unwrap();
-                component.disconnected(element);
-            } else {
-                error!("Component id not found in disconnected.", wasm_id.clone());
-            }
+                            let mut component = component_arc.write().unwrap();
+                            component.disconnected(element);
+                        } else {
+                            error!("Component id not found in disconnected.", wasm_id.clone());
+                        }
 
-            store_map.remove(&wasm_id);
+                        store_map.remove(&wasm_id);
         }
     };
 
@@ -184,11 +184,9 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
             let store_map = store.as_ref().unwrap();
 
             if let Some(component_arc) = store_map.get(&wasm_id) {
-                let mut component = component_arc.lock().unwrap();
+                let mut component = component_arc.write().unwrap();
                 let name = key.as_str();
-                let old_value = ::wasm_bindgen::JsValue::from_str(&from);
-                let new_value = ::wasm_bindgen::JsValue::from_str(&to);
-                component.attribute_changed(element, name, &old_value, &new_value);
+                component.attribute_changed(element, name, &from, &to);
             } else {
                 error!("Component id not found in changed attribute.", wasm_id.clone());
             }
@@ -227,7 +225,7 @@ fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
     let store_hash_map_impl = storage_for_struct_impl(&struct_name);
 
     let expanded = quote! {
-        pub static #store_ident: std::sync::RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<#struct_name>>>>> = std::sync::RwLock::new(None);
+        pub static #store_ident: std::sync::RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::RwLock<#struct_name>>>>> = std::sync::RwLock::new(None);
         #store_hash_map_impl
     };
 
@@ -294,9 +292,9 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
             }
 
             let key = wasm_id.to_string();
-            let store_map = store.as_mut().unwrap();
-            store_map.insert(key.clone(), std::sync::Arc::new(std::sync::Mutex::new(#var_ident)));
-            key
+                        let store_map = store.as_mut().unwrap();
+                        store_map.insert(key.clone(), std::sync::Arc::new(std::sync::RwLock::new(#var_ident)));
+                        key
         }
     };
 
