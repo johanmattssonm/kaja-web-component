@@ -68,8 +68,8 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let component_id_counter = component_counter();
 
     let expanded = quote! {
-        #component_id_counter
         #global_store
+        #component_id_counter
         #rs_self
         #component_struct_item
         #create_js_class_fn
@@ -80,10 +80,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         #changed_fn
     };
 
-    ex
-
-
-    panded.into()
+    expanded.into()
 }
 
 fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::TokenStream {
@@ -102,7 +99,7 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
             let mut store = #store_ident.write().unwrap();
 
             if store.is_none() {
-                error!("Component not found in connect.");
+                error!("Store not created before component not found in connect.");
                 return;
             }
 
@@ -133,7 +130,7 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
             let mut store = #store_ident.write().unwrap();
 
             if store.is_none() {
-                error!("Component not found in connect.");
+                error!("Store not found in disconnected.");
                 return;
             }
 
@@ -166,7 +163,7 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
             let mut store = #store_ident.write().unwrap();
 
             if store.is_none() {
-                error!("Component not found in connect.");
+                error!("Store not found in attribute change callback.");
                 return;
             }
 
@@ -303,7 +300,7 @@ fn component_counter() -> proc_macro2::TokenStream {
         pub fn next_component_id() -> String {
             let wasm_id = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let next_id = wasm_id.to_string();
-            log!("Next ID", next_id);
+            log!("Next ID", next_id.clone());
             next_id
         }
     };
