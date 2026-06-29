@@ -86,7 +86,7 @@ fn storage_for_struct_impl(struct_name: &Ident) -> proc_macro2::TokenStream {
 
     let expanded = quote! {
         impl ComponentStorage for #struct_name {
-            fn storage() -> &'static RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::RwLock<Self>>>>> {
+            fn storage() -> &'static RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<Self>>>>> {
                 &#store_ident
             }
         }
@@ -106,8 +106,6 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
     let expanded = quote! {
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(element: HtmlElement, wasm_id: String) {
-            gloo::console::log!("componentConnect generated wasm_id: {}", wasm_id.clone());
-
             let store = #store_ident.read().unwrap();
 
             if store.is_none() {
@@ -118,11 +116,11 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
             let store_map = store.as_ref().unwrap();
 
             if let Some(component_arc) = store_map.get(&wasm_id) {
-                            let mut component = component_arc.write().unwrap();
-                            component.connected(element);
-                        } else {
-                            error!("Component id not found in connect.", wasm_id.clone());
-                        }
+                let mut component = component_arc.lock().unwrap();
+                component.connected(element);
+            } else {
+                error!("Component id not found in connect.", wasm_id.clone());
+            }
         }
     };
 
@@ -150,13 +148,13 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
             let store_map = store.as_mut().unwrap();
 
             if let Some(component_arc) = store_map.get(&wasm_id) {
-                            let mut component = component_arc.write().unwrap();
-                            component.disconnected(element);
-                        } else {
-                            error!("Component id not found in disconnected.", wasm_id.clone());
-                        }
+                                        let mut component = component_arc.lock().unwrap();
+                                        component.disconnected(element);
+                                    } else {
+                                        error!("Component id not found in disconnected.", wasm_id.clone());
+                                    }
 
-                        store_map.remove(&wasm_id);
+                                    store_map.remove(&wasm_id);
         }
     };
 
@@ -184,12 +182,12 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
             let store_map = store.as_ref().unwrap();
 
             if let Some(component_arc) = store_map.get(&wasm_id) {
-                let mut component = component_arc.write().unwrap();
-                let name = key.as_str();
-                component.attribute_changed(element, name, &from, &to);
-            } else {
-                error!("Component id not found in changed attribute.", wasm_id.clone());
-            }
+                            let mut component = component_arc.lock().unwrap();
+                            let name = key.as_str();
+                            component.attribute_changed(element, name, &from, &to);
+                        } else {
+                            error!("Component id not found in changed attribute.", wasm_id.clone());
+                        }
         }
     };
 
@@ -225,7 +223,7 @@ fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
     let store_hash_map_impl = storage_for_struct_impl(&struct_name);
 
     let expanded = quote! {
-        pub static #store_ident: std::sync::RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::RwLock<#struct_name>>>>> = std::sync::RwLock::new(None);
+        pub static #store_ident: std::sync::RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<#struct_name>>>>> = std::sync::RwLock::new(None);
         #store_hash_map_impl
     };
 
@@ -263,22 +261,13 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
         "init_component_self_{}",
         from_pascal_to_snake(struct_name_str.as_str())
     );
-    let rust_ident = Ident::new(&rust_name, Span::call_site());
 
-    let log_msg = LitStr::new(
-        &format!(
-            "Run {} init rs state. Init self for struct.",
-            struct_name_str
-        ),
-        Span::call_site(),
-    );
+    let rust_ident = Ident::new(&rust_name, Span::call_site());
 
     let expanded = quote! {
         #[callback(#js_name)]
         #[allow(non_snake_case)]
         pub fn #rust_ident() -> String {  // init_component_state_struct_name, returns id for the instance of the element
-            gloo::console::log!(#log_msg);
-
             let mut #var_ident = #struct_ident::default();
             let wasm_id = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -293,7 +282,7 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
 
             let key = wasm_id.to_string();
                         let store_map = store.as_mut().unwrap();
-                        store_map.insert(key.clone(), std::sync::Arc::new(std::sync::RwLock::new(#var_ident)));
+                        store_map.insert(key.clone(), std::sync::Arc::new(std::sync::Mutex::new(#var_ident)));
                         key
         }
     };
@@ -330,10 +319,7 @@ fn create_class(
                 .write()
                 .expect("failed to acquire write lock");
 
-            log!("Check if store is initialized.");
-
             if store.is_none() {
-                log!("Init store");
                 *store = Some(std::collections::HashMap::new());
             }
         }
@@ -345,8 +331,6 @@ fn create_class(
         let component_name = #name_str_lit;
             let tag_name = #tag;
 
-            log!("init component", component_name, tag_name);
-
             let js_init = String::from(
                 r#"
                     return class extends HTMLElement {
@@ -354,7 +338,6 @@ fn create_class(
                             super();
                             let componentId = __INIT_SELF_CALLBACK();
                             this.setAttribute("componentid", componentId);
-                            console.log("created class " + componentId);
                         }
 
                         connectedCallback() {
@@ -369,7 +352,6 @@ fn create_class(
 
                         attributeChangedCallback(name, oldValue, newValue) {
                             let componentid = this.getAttribute("componentid");
-                            console.log(componentid, name, oldValue, newValue);
                             __ATTRIBUTE_CHANGED_CALLBACK(this, componentid, name, oldValue === null ? "" : String(oldValue), newValue === null ? "" : String(newValue));
                         }
 
