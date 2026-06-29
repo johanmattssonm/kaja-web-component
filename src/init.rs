@@ -80,6 +80,21 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     expanded.into()
 }
 
+fn storage_for_struct_impl(struct_name: &Ident) -> proc_macro2::TokenStream {
+    let store_name_str = store_name(struct_name);
+    let store_ident = Ident::new(&store_name_str, Span::call_site());
+
+    let expanded = quote! {
+        impl ComponentStorage for #struct_name {
+            fn storage() -> &'static RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<Self>>>>> {
+                &#store_ident
+            }
+        }
+    };
+
+    expanded
+}
+
 fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::TokenStream {
     let js_callback_ident = Ident::new(atach_state_js_fn, Span::call_site());
     let rs_name_str = from_pascal_to_snake(atach_state_js_fn);
@@ -93,16 +108,17 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
         fn #rs_name_ident(element: HtmlElement, wasm_id: String) {
             gloo::console::log!("componentConnect generated wasm_id: {}", wasm_id.clone());
 
-            let mut store = #store_ident.write().unwrap();
+            let store = #store_ident.read().unwrap();
 
             if store.is_none() {
                 error!("Store not created before component not found in connect.");
                 return;
             }
 
-            let store_map = store.as_mut().unwrap();
+            let store_map = store.as_ref().unwrap();
 
-            if let Some(component) = store_map.get_mut(&wasm_id) {
+            if let Some(component_arc) = store_map.get(&wasm_id) {
+                let mut component = component_arc.lock().unwrap();
                 component.connected(element);
             } else {
                 error!("Component id not found in connect.", wasm_id.clone());
@@ -133,7 +149,8 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
 
             let store_map = store.as_mut().unwrap();
 
-            if let Some(component) = store_map.get_mut(&wasm_id) {
+            if let Some(component_arc) = store_map.get(&wasm_id) {
+                let mut component = component_arc.lock().unwrap();
                 component.disconnected(element);
             } else {
                 error!("Component id not found in disconnected.", wasm_id.clone());
@@ -157,16 +174,17 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
     let expanded = quote! {
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(element: HtmlElement, wasm_id: String, key: String, from: String, to: String) {
-            let mut store = #store_ident.write().unwrap();
+            let store = #store_ident.read().unwrap();
 
             if store.is_none() {
                 error!("Store not found in attribute change callback.");
                 return;
             }
 
-            let store_map = store.as_mut().unwrap();
+            let store_map = store.as_ref().unwrap();
 
-            if let Some(component) = store_map.get_mut(&wasm_id) {
+            if let Some(component_arc) = store_map.get(&wasm_id) {
+                let mut component = component_arc.lock().unwrap();
                 let name = key.as_str();
                 let old_value = ::wasm_bindgen::JsValue::from_str(&from);
                 let new_value = ::wasm_bindgen::JsValue::from_str(&to);
@@ -206,9 +224,11 @@ fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
     // Generate only the per-component store (HashMap) here.
     let store_name = store_name(&struct_name);
     let store_ident = Ident::new(&store_name, Span::call_site());
+    let store_hash_map_impl = storage_for_struct_impl(&struct_name);
 
     let expanded = quote! {
-        pub static #store_ident: std::sync::RwLock<Option<std::collections::HashMap<String, #struct_name>>> = std::sync::RwLock::new(None);
+        pub static #store_ident: std::sync::RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<#struct_name>>>>> = std::sync::RwLock::new(None);
+        #store_hash_map_impl
     };
 
     expanded
@@ -275,7 +295,7 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
 
             let key = wasm_id.to_string();
             let store_map = store.as_mut().unwrap();
-            store_map.insert(key.clone(), #var_ident);
+            store_map.insert(key.clone(), std::sync::Arc::new(std::sync::Mutex::new(#var_ident)));
             key
         }
     };
