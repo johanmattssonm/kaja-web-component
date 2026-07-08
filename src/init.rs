@@ -148,13 +148,13 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
             let store_map = store.as_mut().unwrap();
 
             if let Some(component_arc) = store_map.get(&wasm_id) {
-                                        let mut component = component_arc.lock().unwrap();
-                                        component.disconnected(element);
-                                    } else {
-                                        error!("Component id not found in disconnected.", wasm_id.clone());
-                                    }
+                let mut component = component_arc.lock().unwrap();
+                component.disconnected(element);
+            } else {
+                error!("Component id not found in disconnected.", wasm_id.clone());
+            }
 
-                                    store_map.remove(&wasm_id);
+            store_map.remove(&wasm_id);
         }
     };
 
@@ -182,12 +182,13 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
             let store_map = store.as_ref().unwrap();
 
             if let Some(component_arc) = store_map.get(&wasm_id) {
-                            let mut component = component_arc.lock().unwrap();
-                            let name = key.as_str();
-                            component.attribute_changed(element, name, &from, &to);
-                        } else {
-                            error!("Component id not found in changed attribute.", wasm_id.clone());
-                        }
+                // FIXME: don't take the lock here. pass it along
+                let mut component = component_arc.lock().unwrap();
+                let name = key.as_str();
+                component.attribute_changed(element, name, &from, &to);
+            } else {
+                error!("Component id not found in changed attribute.", wasm_id.clone());
+            }
         }
     };
 
