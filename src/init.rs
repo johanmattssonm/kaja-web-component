@@ -349,6 +349,9 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
         from_pascal_to_snake(struct_name_str.as_str())
     );
 
+    let mut kebab_case_name = from_pascal_to_snake(struct_name_str.as_str());
+    kebab_case_name = kebab_case_name.replace("_", "-");
+
     let rust_ident = Ident::new(&rust_name, Span::call_site());
 
     let expanded = quote! {
@@ -356,7 +359,8 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
         #[allow(non_snake_case)]
         pub fn #rust_ident() -> String {  // init_component_state_struct_name, returns id for the instance of the element
             let mut #var_ident = #struct_ident::default();
-            let wasm_id = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let component_counter = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let wasm_id = format!("{}-{}", #kebab_case_name, component_counter);
 
             let mut store = #store_ident
                 .write()
@@ -368,9 +372,9 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
             }
 
             let key = wasm_id.to_string();
-                        let store_map = store.as_mut().unwrap();
-                        store_map.insert(key.clone(), std::sync::Arc::new(std::sync::Mutex::new(#var_ident)));
-                        key
+            let store_map = store.as_mut().unwrap();
+            store_map.insert(key.clone(), std::sync::Arc::new(std::sync::Mutex::new(#var_ident)));
+            key
         }
     };
 
