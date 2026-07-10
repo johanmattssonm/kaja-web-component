@@ -1,5 +1,3 @@
-use std::fmt::format;
-
 use proc_macro as pm;
 use proc_macro2::Span;
 use quote::quote;
@@ -91,8 +89,8 @@ fn storage_for_struct_impl(struct_name: &Ident) -> proc_macro2::TokenStream {
     let store_ident = Ident::new(&store_name_str, Span::call_site());
 
     let expanded = quote! {
-        impl ComponentStorage for #struct_name {
-            fn storage() -> &'static RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<Self>>>>> {
+        impl ::kaja_web::ComponentStorage for #struct_name {
+            fn storage() -> &'static std::sync::RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<Self>>>>> {
                 &#store_ident
             }
         }
@@ -105,13 +103,12 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
     let js_callback_ident = Ident::new(atach_state_js_fn, Span::call_site());
     let rs_name_str = from_pascal_to_snake(atach_state_js_fn);
     let rs_name_ident = Ident::new(&rs_name_str, Span::call_site());
-
     let store_name_str = store_name(struct_name);
     let store_ident = Ident::new(&store_name_str, Span::call_site());
 
     let expanded = quote! {
         #[callback(#js_callback_ident)]
-        fn #rs_name_ident(element: HtmlElement, wasm_id: String) {
+        fn #rs_name_ident(id: String) {
             let store = #store_ident.read().unwrap();
 
             if store.is_none() {
@@ -121,11 +118,10 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
 
             let store_map = store.as_ref().unwrap();
 
-            if let Some(component_arc) = store_map.get(&wasm_id) {
-                let mut component = component_arc.lock().unwrap();
-                component.connected(element);
+            if store_map.contains_key(&id) {
+                #struct_name::connected(&id);
             } else {
-                error!("Component id not found in connect.", wasm_id.clone());
+                error!("Component id not found in connect.", id.clone());
             }
         }
     };
@@ -143,7 +139,7 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
 
     let expanded = quote! {
         #[callback(#js_callback_ident)]
-        fn #rs_name_ident(element: HtmlElement, wasm_id: String) {
+        fn #rs_name_ident(wasm_id: String) {
             let mut store = #store_ident.write().unwrap();
 
             if store.is_none() {
@@ -153,9 +149,8 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
 
             let store_map = store.as_mut().unwrap();
 
-            if let Some(component_arc) = store_map.get(&wasm_id) {
-                let mut component = component_arc.lock().unwrap();
-                component.disconnected(element);
+            if store_map.contains_key(&wasm_id) {
+                #struct_name::disconnected(&wasm_id);
             } else {
                 error!("Component id not found in disconnected.", wasm_id.clone());
             }
@@ -184,6 +179,7 @@ fn component_impl_quote(struct_name: &Ident) -> proc_macro2::TokenStream {
         }
 
         pub fn #init_component_fn() {
+            log!("Init component", stringify!(#struct_name));
             #struct_name::main_init_ui_receiver();
         }
 
@@ -205,7 +201,9 @@ fn component_impl_quote(struct_name: &Ident) -> proc_macro2::TokenStream {
             fn get_component(
                 id: &str,
             ) -> Option<std::sync::Arc<std::sync::Mutex<#struct_name>>> {
-                #store_ident.read().get(id).cloned()
+                let store = #store_ident.read().ok()?;
+                let store_map = store.as_ref()?;
+                store_map.get(id).cloned()
             }
 
             async fn ui_update_loop(receiver: async_channel::Receiver<String>) {
@@ -252,11 +250,9 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
 
             let store_map = store.as_ref().unwrap();
 
-            if let Some(component_arc) = store_map.get(&wasm_id) {
-                // FIXME: don't take the lock here. pass it along
-                let mut component = component_arc.lock().unwrap();
+            if store_map.contains_key(&wasm_id) {
                 let name = key.as_str();
-                component.attribute_changed(element, name, &from, &to);
+                #struct_name::attribute_changed(&wasm_id, name, &from, &to);
             } else {
                 error!("Component id not found in changed attribute.", wasm_id.clone());
             }
@@ -300,8 +296,8 @@ fn generate_channel_message_holder(struct_name: Ident) -> proc_macro2::TokenStre
     let store_ident = Ident::new(&channel_name, Span::call_site());
 
     let expanded = quote! {
-        pub static #store_ident: std::sync::LazyLock<std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<Main>>>>> =
-            std::sync::LazyLock::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+        pub static #store_ident: std::sync::OnceLock<async_channel::Sender<String>> =
+            std::sync::OnceLock::new();
     };
 
     expanded
