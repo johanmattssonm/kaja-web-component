@@ -1,3 +1,5 @@
+use std::fmt::format;
+
 use proc_macro as pm;
 use proc_macro2::Span;
 use quote::quote;
@@ -38,6 +40,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let struct_name_ident = &component_struct_item.ident;
 
     let global_store = generate_component_store(struct_name_ident.clone());
+    let global_channel = generate_channel_message_holder(struct_name_ident.clone());
 
     let create_class_js = format!("createComponentClass{}", struct_name_ident);
     let init_self_js = format!("initSelf{}", struct_name_ident);
@@ -65,9 +68,11 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let detach_fn = detach_quote(&detach_js, struct_name_ident);
     let observed_fn = observed_quote(&observed_js, struct_name_ident);
     let changed_fn = changed_quote(&changed_js, struct_name_ident);
+    let component_impl = component_impl_quote(struct_name_ident);
 
     let expanded = quote! {
         #global_store
+        #global_channel
         #rs_self
         #component_struct_item
         #create_js_class_fn
@@ -75,6 +80,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         #detach_fn
         #observed_fn
         #changed_fn
+        #component_impl
     };
 
     expanded.into()
@@ -161,6 +167,71 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
     expanded
 }
 
+fn component_impl_quote(struct_name: &Ident) -> proc_macro2::TokenStream {
+    let store_name = store_name(struct_name);
+    let store_ident = Ident::new(&store_name, struct_name.span());
+
+    let channel_name = channel_name(struct_name);
+    let channel_ident = Ident::new(&channel_name, struct_name.span());
+
+    let snake_name = from_pascal_to_snake(&struct_name.to_string());
+    let init_fn = format!("{}_init_component", snake_name);
+    let init_component_fn = Ident::new(&init_fn, struct_name.span());
+
+    let expanded = quote! {
+        ::inventory::submit! {
+            InitComponentFn(#init_component_fn)
+        }
+
+        pub fn #init_component_fn() {
+            #struct_name::main_init_ui_receiver();
+        }
+
+        impl #struct_name {
+            pub fn post_ui_thread_update(id: &str) {
+                // FIXME: check lock
+                if let Some(sender) = #channel_ident.get() {
+                    match sender.try_send(id.to_string()) {
+                        Ok(_) => {
+                            log!("scheduled update for:", id);
+                        }
+                        Err(e) => {
+                            log!("could not schedule update for", id);
+                        }
+                    }
+                }
+            }
+
+            fn get_component(
+                id: &str,
+            ) -> Option<std::sync::Arc<std::sync::Mutex<#struct_name>>> {
+                #store_ident.read().get(id).cloned()
+            }
+
+            async fn ui_update_loop(receiver: async_channel::Receiver<String>) {
+                while let Ok(id) = receiver.recv().await {
+                    Self::update(&id);
+                }
+
+                log!("ui_update_loop finished");
+            }
+
+            pub fn main_init_ui_receiver() {
+                let (sender, receiver) = async_channel::unbounded::<String>();
+
+                #channel_ident
+                    .set(sender.clone())
+                    .expect("#channel_ident already initialized");
+
+                // This runs on the browser UI thread
+                wasm_bindgen_futures::spawn_local(#struct_name::ui_update_loop(receiver));
+            }
+        }
+    };
+
+    expanded
+}
+
 fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::TokenStream {
     let js_callback_ident = Ident::new(changed_state_js_fn, Span::call_site());
     let rs_name_str = from_pascal_to_snake(changed_state_js_fn);
@@ -215,6 +286,25 @@ fn observed_quote(observed_js_fn: &str, struct_name: &Ident) -> proc_macro2::Tok
 fn store_name(struct_name: &Ident) -> String {
     let store_name = from_pascal_to_snake(&struct_name.to_string()).to_uppercase() + "_COMPONENTS";
     store_name
+}
+
+fn channel_name(struct_name: &Ident) -> String {
+    let store_name =
+        from_pascal_to_snake(&struct_name.to_string()).to_uppercase() + "_UPDATE_SENDER";
+    store_name
+}
+
+fn generate_channel_message_holder(struct_name: Ident) -> proc_macro2::TokenStream {
+    // Generate only the per-component store (HashMap) here.
+    let channel_name = channel_name(&struct_name);
+    let store_ident = Ident::new(&channel_name, Span::call_site());
+
+    let expanded = quote! {
+        pub static #store_ident: std::sync::LazyLock<std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<Main>>>>> =
+            std::sync::LazyLock::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+    };
+
+    expanded
 }
 
 fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
@@ -337,23 +427,27 @@ fn create_class(
                     return class extends HTMLElement {
                         constructor() {
                             super();
-                            let componentId = __INIT_SELF_CALLBACK();
-                            this.setAttribute("componentid", componentId);
+                            const currentId = this.getAttribute("id");
+                            let generatedId = __INIT_SELF_CALLBACK();
+
+                            if (!currentId) {
+                                this.setAttribute("id", generatedId);
+                            }
                         }
 
                         connectedCallback() {
-                            let componentid = this.getAttribute("componentid");
-                            __ATTACH_CALLBACK(this, componentid);
+                            let componentid = this.getAttribute("id");
+                            __ATTACH_CALLBACK(componentid);
                         }
 
                         disconnectedCallback() {
-                            let componentid = this.getAttribute("componentid");
-                            __DETACH_CALLBACK(this, componentid);
+                            let componentid = this.getAttribute("id");
+                            __DETACH_CALLBACK(componentid);
                         }
 
                         attributeChangedCallback(name, oldValue, newValue) {
-                            let componentid = this.getAttribute("componentid");
-                            __ATTRIBUTE_CHANGED_CALLBACK(this, componentid, name, oldValue === null ? "" : String(oldValue), newValue === null ? "" : String(newValue));
+                            let componentid = this.getAttribute("id");
+                            __ATTRIBUTE_CHANGED_CALLBACK(componentid, name, oldValue === null ? "" : String(oldValue), newValue === null ? "" : String(newValue));
                         }
 
                         static get observedAttributes() {
