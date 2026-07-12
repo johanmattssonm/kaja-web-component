@@ -90,7 +90,11 @@ fn storage_for_struct_impl(struct_name: &Ident) -> proc_macro2::TokenStream {
 
     let expanded = quote! {
         impl ::kaja_web::ComponentStorage for #struct_name {
-            fn storage() -> &'static std::sync::RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<Self>>>>> {
+            fn storage() -> &'static std::thread::LocalKey<
+                std::cell::RefCell<
+                    std::collections::HashMap<String, std::sync::Arc<::kaja_web::ArcSwap<Self>>>,
+                >,
+            > {
                 &#store_ident
             }
         }
@@ -109,16 +113,9 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
     let expanded = quote! {
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(id: String) {
-            let store = #store_ident.read().unwrap();
+            let exists = #store_ident.with(|store| store.borrow().contains_key(&id));
 
-            if store.is_none() {
-                error!("Store not created before component not found in connect.");
-                return;
-            }
-
-            let store_map = store.as_ref().unwrap();
-
-            if store_map.contains_key(&id) {
+            if exists {
                 #struct_name::connected(&id);
             } else {
                 error!("Component id not found in connect.", id.clone());
@@ -140,22 +137,16 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
     let expanded = quote! {
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(wasm_id: String) {
-            let mut store = #store_ident.write().unwrap();
+            let exists = #store_ident.with(|store| store.borrow().contains_key(&wasm_id));
 
-            if store.is_none() {
-                error!("Store not found in disconnected.");
-                return;
-            }
-
-            let store_map = store.as_mut().unwrap();
-
-            if store_map.contains_key(&wasm_id) {
+            if exists {
                 #struct_name::disconnected(&wasm_id);
+                #store_ident.with(|store| {
+                    store.borrow_mut().remove(&wasm_id);
+                });
             } else {
                 error!("Component id not found in disconnected.", wasm_id.clone());
             }
-
-            store_map.remove(&wasm_id);
         }
     };
 
@@ -185,13 +176,12 @@ fn component_impl_quote(struct_name: &Ident) -> proc_macro2::TokenStream {
 
         impl #struct_name {
             pub fn post_ui_thread_update(id: &str) {
-                // FIXME: check lock
                 if let Some(sender) = #channel_ident.get() {
                     match sender.try_send(id.to_string()) {
                         Ok(_) => {
                             log!("scheduled update for:", id);
                         }
-                        Err(e) => {
+                        Err(_e) => {
                             log!("could not schedule update for", id);
                         }
                     }
@@ -200,10 +190,12 @@ fn component_impl_quote(struct_name: &Ident) -> proc_macro2::TokenStream {
 
             fn get_component(
                 id: &str,
-            ) -> Option<std::sync::Arc<std::sync::Mutex<#struct_name>>> {
-                let store = #store_ident.read().ok()?;
-                let store_map = store.as_ref()?;
-                store_map.get(id).cloned()
+            ) -> Option<std::sync::Arc<::kaja_web::ArcSwap<#struct_name>>> {
+                #store_ident.with(|store| store.borrow().get(id).cloned())
+            }
+
+            fn read_component(id: &str) -> Option<std::sync::Arc<#struct_name>> {
+                Self::get_component(id).map(|handle| handle.load_full())
             }
 
             async fn ui_update_loop(receiver: async_channel::Receiver<String>) {
@@ -241,16 +233,9 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
     let expanded = quote! {
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(element: HtmlElement, wasm_id: String, key: String, from: String, to: String) {
-            let store = #store_ident.read().unwrap();
+            let exists = #store_ident.with(|store| store.borrow().contains_key(&wasm_id));
 
-            if store.is_none() {
-                error!("Store not found in attribute change callback.");
-                return;
-            }
-
-            let store_map = store.as_ref().unwrap();
-
-            if store_map.contains_key(&wasm_id) {
+            if exists {
                 let name = key.as_str();
                 #struct_name::attribute_changed(&wasm_id, name, &from, &to);
             } else {
@@ -310,7 +295,10 @@ fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
     let store_hash_map_impl = storage_for_struct_impl(&struct_name);
 
     let expanded = quote! {
-        pub static #store_ident: std::sync::RwLock<Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<#struct_name>>>>> = std::sync::RwLock::new(None);
+        std::thread_local! {
+            pub static #store_ident: std::cell::RefCell<std::collections::HashMap<String, std::sync::Arc<::kaja_web::ArcSwap<#struct_name>>>> =
+                std::cell::RefCell::new(std::collections::HashMap::new());
+        }
         #store_hash_map_impl
     };
 
@@ -358,22 +346,17 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
         #[callback(#js_name)]
         #[allow(non_snake_case)]
         pub fn #rust_ident() -> String {  // init_component_state_struct_name, returns id for the instance of the element
-            let mut #var_ident = #struct_ident::default();
+            let #var_ident = #struct_ident::default();
             let component_counter = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let wasm_id = format!("{}-{}", #kebab_case_name, component_counter);
 
-            let mut store = #store_ident
-                .write()
-                .expect("failed to acquire write lock");
-
-            if store.is_none() {
-                error!("No store in self init.");
-                return "".to_string();
-            }
-
             let key = wasm_id.to_string();
-            let store_map = store.as_mut().unwrap();
-            store_map.insert(key.clone(), std::sync::Arc::new(std::sync::Mutex::new(#var_ident)));
+            #store_ident.with(|store| {
+                store.borrow_mut().insert(
+                    key.clone(),
+                    std::sync::Arc::new(::kaja_web::ArcSwap::from_pointee(#var_ident)),
+                );
+            });
             key
         }
     };
@@ -389,36 +372,17 @@ fn create_class(
     detach_state_fn: &str,
     observed_fn: &str,
     change_fn: &str,
-    struct_name: &Ident,
+    _struct_name: &Ident,
 ) -> proc_macro2::TokenStream {
     let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
-    let store_name_str = store_name(&struct_name);
-    let store_ident = Ident::new(&store_name_str, Span::call_site());
-    let init_store_fn = format!(
-        "init_store_{}",
-        from_pascal_to_snake(struct_name.to_string().as_str())
-    );
-    let init_store_ident = Ident::new(&init_store_fn, Span::call_site());
 
     let expanded = quote! {
         ::inventory::submit! {
             InitComponentFn(#class_creator)
         }
 
-        fn #init_store_ident() {
-            let mut store = #store_ident
-                .write()
-                .expect("failed to acquire write lock");
-
-            if store.is_none() {
-                *store = Some(std::collections::HashMap::new());
-            }
-        }
-
         #[allow(non_snake_case)]
         pub fn #class_creator() { // createComponentTheStructName
-        #init_store_ident();
-
         let component_name = #name_str_lit;
             let tag_name = #tag;
 
