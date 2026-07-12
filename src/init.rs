@@ -90,7 +90,7 @@ fn storage_for_struct_impl(struct_name: &Ident) -> proc_macro2::TokenStream {
         impl ::kaja_web::ComponentStorage for #struct_name {
             fn storage() -> &'static std::thread::LocalKey<
                 std::cell::RefCell<
-                    std::collections::HashMap<String, ::kaja_web::SharedComponent<Self>>,
+                    std::collections::HashMap<String, Rc<RefCell<#struct_name>>>,
                 >,
             > {
                 &#store_ident
@@ -179,14 +179,14 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
 
     let expanded = quote! {
         #[callback(#js_callback_ident)]
-        fn #rs_name_ident(element: HtmlElement, wasm_id: String, key: String, from: String, to: String) {
-            let exists = #store_ident.with(|store| store.borrow().contains_key(&wasm_id));
+        fn #rs_name_ident(element_id: String, key: String, from: String, to: String) {
+            let exists = #store_ident.with(|store| store.borrow().contains_key(&element_id));
 
             if exists {
                 let name = key.as_str();
-                #struct_name::attribute_changed(&wasm_id, name, &from, &to);
+                #struct_name::attribute_changed(&element_id, name, &from, &to);
             } else {
-                error!("Component id not found in changed attribute.", wasm_id.clone());
+                error!("Component id not found in changed attribute.", element_id.clone());
             }
         }
     };
@@ -232,8 +232,14 @@ fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
         impl #struct_name {
             pub fn get_component(
                 component_id: &str,
-            ) -> Option<::kaja_web::SharedComponent<#struct_name>> {
+            ) -> Option<Rc<RefCell<#struct_name>>> {
                 #store_ident.with(|store| store.borrow().get(component_id).cloned())
+            }
+
+            pub fn component_exists(
+                component_id: &str,
+            ) -> bool {
+                #store_ident.with(|store| store.borrow().contains_key(component_id))
             }
         }
     };
@@ -281,12 +287,16 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
     let expanded = quote! {
         #[callback(#js_name)]
         #[allow(non_snake_case)]
-        pub fn #rust_ident() -> String {  // init_component_state_struct_name, returns id for the instance of the element
+        pub fn #rust_ident(current_id: String) -> String {  // init_component_state_struct_name, returns id for the instance of the element
             let #var_ident = #struct_ident::default();
-            let component_counter = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let wasm_id = format!("{}-{}", #kebab_case_name, component_counter);
 
-            let key = wasm_id.to_string();
+            let key = if current_id.is_empty() {
+                let component_counter = ::kaja_web::NEXT_COMPONENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                format!("{}-{}", #kebab_case_name, component_counter)
+            } else {
+                current_id
+            };
+
             #store_ident.with(|store| {
                 store
                     .borrow_mut()
@@ -326,11 +336,16 @@ fn create_class(
                     return class extends HTMLElement {
                         constructor() {
                             super();
-                            const currentId = this.getAttribute("id");
-                            let generatedId = __INIT_SELF_CALLBACK();
+                            let currentId = this.getAttribute("id");
+
+                            if (currentId === null) {
+                                currentId = "";
+                            }
+
+                            let resolvedId = __INIT_SELF_CALLBACK(currentId);
 
                             if (!currentId) {
-                                this.setAttribute("id", generatedId);
+                                this.setAttribute("id", resolvedId);
                             }
                         }
 
@@ -373,11 +388,10 @@ fn create_class(
 
             let class_fn = class.unwrap();
             let registry = web_sys::window().unwrap().custom_elements();
-
             let result = registry.define(#tag, &class_fn.unchecked_into());
 
             if result.is_err() {
-                error!("Failed to register component {}", #tag);
+                error!("Failed to register component", #tag);
             }
         }
     };
