@@ -38,7 +38,6 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let struct_name_ident = &component_struct_item.ident;
 
     let global_store = generate_component_store(struct_name_ident.clone());
-    let global_channel = generate_channel_message_holder(struct_name_ident.clone());
 
     let create_class_js = format!("createComponentClass{}", struct_name_ident);
     let init_self_js = format!("initSelf{}", struct_name_ident);
@@ -70,7 +69,6 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
 
     let expanded = quote! {
         #global_store
-        #global_channel
         #rs_self
         #component_struct_item
         #create_js_class_fn
@@ -92,7 +90,7 @@ fn storage_for_struct_impl(struct_name: &Ident) -> proc_macro2::TokenStream {
         impl ::kaja_web::ComponentStorage for #struct_name {
             fn storage() -> &'static std::thread::LocalKey<
                 std::cell::RefCell<
-                    std::collections::HashMap<String, std::sync::Arc<::kaja_web::ArcSwap<Self>>>,
+                    std::collections::HashMap<String, ::kaja_web::SharedComponent<Self>>,
                 >,
             > {
                 &#store_ident
@@ -154,12 +152,6 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
 }
 
 fn component_impl_quote(struct_name: &Ident) -> proc_macro2::TokenStream {
-    let store_name = store_name(struct_name);
-    let store_ident = Ident::new(&store_name, struct_name.span());
-
-    let channel_name = channel_name(struct_name);
-    let channel_ident = Ident::new(&channel_name, struct_name.span());
-
     let snake_name = from_pascal_to_snake(&struct_name.to_string());
     let init_fn = format!("{}_init_component", snake_name);
     let init_component_fn = Ident::new(&init_fn, struct_name.span());
@@ -171,51 +163,6 @@ fn component_impl_quote(struct_name: &Ident) -> proc_macro2::TokenStream {
 
         pub fn #init_component_fn() {
             log!("Init component", stringify!(#struct_name));
-            #struct_name::main_init_ui_receiver();
-        }
-
-        impl #struct_name {
-            pub fn post_ui_thread_update(id: &str) {
-                if let Some(sender) = #channel_ident.get() {
-                    match sender.try_send(id.to_string()) {
-                        Ok(_) => {
-                            log!("scheduled update for:", id);
-                        }
-                        Err(_e) => {
-                            log!("could not schedule update for", id);
-                        }
-                    }
-                }
-            }
-
-            fn get_component(
-                id: &str,
-            ) -> Option<std::sync::Arc<::kaja_web::ArcSwap<#struct_name>>> {
-                #store_ident.with(|store| store.borrow().get(id).cloned())
-            }
-
-            fn read_component(id: &str) -> Option<std::sync::Arc<#struct_name>> {
-                Self::get_component(id).map(|handle| handle.load_full())
-            }
-
-            async fn ui_update_loop(receiver: async_channel::Receiver<String>) {
-                while let Ok(id) = receiver.recv().await {
-                    Self::update(&id);
-                }
-
-                log!("ui_update_loop finished");
-            }
-
-            pub fn main_init_ui_receiver() {
-                let (sender, receiver) = async_channel::unbounded::<String>();
-
-                #channel_ident
-                    .set(sender.clone())
-                    .expect("#channel_ident already initialized");
-
-                // This runs on the browser UI thread
-                wasm_bindgen_futures::spawn_local(#struct_name::ui_update_loop(receiver));
-            }
         }
     };
 
@@ -269,25 +216,6 @@ fn store_name(struct_name: &Ident) -> String {
     store_name
 }
 
-fn channel_name(struct_name: &Ident) -> String {
-    let store_name =
-        from_pascal_to_snake(&struct_name.to_string()).to_uppercase() + "_UPDATE_SENDER";
-    store_name
-}
-
-fn generate_channel_message_holder(struct_name: Ident) -> proc_macro2::TokenStream {
-    // Generate only the per-component store (HashMap) here.
-    let channel_name = channel_name(&struct_name);
-    let store_ident = Ident::new(&channel_name, Span::call_site());
-
-    let expanded = quote! {
-        pub static #store_ident: std::sync::OnceLock<async_channel::Sender<String>> =
-            std::sync::OnceLock::new();
-    };
-
-    expanded
-}
-
 fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
     // Generate only the per-component store (HashMap) here.
     let store_name = store_name(&struct_name);
@@ -296,10 +224,18 @@ fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
 
     let expanded = quote! {
         std::thread_local! {
-            pub static #store_ident: std::cell::RefCell<std::collections::HashMap<String, std::sync::Arc<::kaja_web::ArcSwap<#struct_name>>>> =
+            pub static #store_ident: std::cell::RefCell<std::collections::HashMap<String, ::kaja_web::SharedComponent<#struct_name>>> =
                 std::cell::RefCell::new(std::collections::HashMap::new());
         }
         #store_hash_map_impl
+
+        impl #struct_name {
+            pub fn get_component(
+                component_id: &str,
+            ) -> Option<::kaja_web::SharedComponent<#struct_name>> {
+                #store_ident.with(|store| store.borrow().get(component_id).cloned())
+            }
+        }
     };
 
     expanded
@@ -352,10 +288,9 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
 
             let key = wasm_id.to_string();
             #store_ident.with(|store| {
-                store.borrow_mut().insert(
-                    key.clone(),
-                    std::sync::Arc::new(::kaja_web::ArcSwap::from_pointee(#var_ident)),
-                );
+                store
+                    .borrow_mut()
+                    .insert(key.clone(), std::rc::Rc::new(std::cell::RefCell::new(#var_ident)));
             });
             key
         }
