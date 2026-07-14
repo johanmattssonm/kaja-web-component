@@ -517,10 +517,25 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 }
             }
 
-            fn get_attribute(&self, name: &str) -> Option<String> {
+            fn get_attribute_string(&self, name: &str) -> Option<String> {
                 let handle = self.handle.borrow();
                 let attr = handle.attribute_values.borrow();
                 attr.get_attribute(name)
+            }
+
+            fn get_attribute<T>(&self, name: &str) -> Option<T>
+            where
+                T: std::str::FromStr,
+            {
+                let value = self.get_attribute_string(name)?;
+
+                match value.parse::<T>() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        error!("Failed to parse attribute:", name, "in", #struct_name_lit);
+                        None
+                    }
+                }
             }
 
             fn get_attributes(&self) -> std::rc::Rc<std::cell::RefCell<#struct_ident>> {
