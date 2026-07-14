@@ -43,6 +43,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let detach_js = format!("detachComponent{}", struct_ident);
     let observed_js = format!("observedComponentAttribute{}", struct_ident);
     let changed_js = format!("changedComponentAttribute{}", struct_ident);
+    let validate_attribute_js = format!("validateAttribute{}", struct_ident);
 
     let create_class_js_indent = Ident::new(&create_class_js, Span::call_site());
     let init_self_js_ident = Ident::new(&init_self_js, Span::call_site());
@@ -55,6 +56,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         detach_js.as_str(),
         observed_js.as_str(),
         changed_js.as_str(),
+        validate_attribute_js.as_str(),
     );
 
     let rs_self = gen_rust_self(component_struct_item.clone(), init_self_js_ident);
@@ -64,6 +66,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let changed_fn = changed_quote(&changed_js, struct_ident);
     let component_impl = component_impl_quote(struct_ident);
     let component_full_impl = create_component(&component_struct_item);
+    let validate_attribute_fn = validate_attribute_quote(&validate_attribute_js, struct_ident);
 
     let expanded = quote! {
         #[allow(dead_code, unreachable_code)]
@@ -79,6 +82,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         #detach_fn
         #observed_fn
         #changed_fn
+        #validate_attribute_fn
     };
 
     expanded.into()
@@ -126,6 +130,31 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
             } else {
                 error!("Component id not found in disconnected.", wasm_id.clone());
             }
+        }
+    };
+
+    expanded
+}
+
+fn validate_attribute_quote(
+    validate_attribute_js: &str,
+    struct_name: &Ident,
+) -> proc_macro2::TokenStream {
+    let js_callback_ident = Ident::new(validate_attribute_js, Span::call_site());
+    let rs_name_str = from_pascal_to_snake(validate_attribute_js);
+    let rs_name_ident = Ident::new(&rs_name_str, Span::call_site());
+    let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
+
+    let expanded = quote! {
+        #[allow(unreachable_code)]
+        #[callback(#js_callback_ident)]
+        fn #rs_name_ident(wasm_id: String, name: String, value: String) -> bool {
+            if let Some(component) = #component_name::get_component(&wasm_id) {
+                return component.valid_attribute(name.as_str(), value.as_str());
+            }
+
+            error!("No component found for", wasm_id.clone());
+            false
         }
     };
 
@@ -278,6 +307,7 @@ fn create_class(
     detach_state_fn: &str,
     observed_fn: &str,
     change_fn: &str,
+    validate_attribute_fn: &str,
 ) -> proc_macro2::TokenStream {
     let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
 
@@ -312,22 +342,38 @@ fn create_class(
                             }
 
                             connectedCallback() {
-                                let componentid = this.getAttribute("id");
-                                __ATTACH_CALLBACK(componentid);
+                                let componentId = this.getAttribute("id");
+                                __ATTACH_CALLBACK(componentId);
                             }
 
                             disconnectedCallback() {
-                                let componentid = this.getAttribute("id");
-                                __DETACH_CALLBACK(componentid);
+                                let componentId = this.getAttribute("id");
+                                __DETACH_CALLBACK(componentId);
                             }
 
                             attributeChangedCallback(name, oldValue, newValue) {
-                                let componentid = this.getAttribute("id");
-                                __ATTRIBUTE_CHANGED_CALLBACK(componentid, name, oldValue === null ? "" : String(oldValue), newValue === null ? "" : String(newValue));
+                                let componentId = this.getAttribute("id");
+                                __ATTRIBUTE_CHANGED_CALLBACK(componentId, name, oldValue === null ? "" : String(oldValue), newValue === null ? "" : String(newValue));
                             }
 
                             static get observedAttributes() {
                                 return __OBSERVED_CALLBACK();
+                            }
+
+                            setAttribute(name, value) {
+                                let componentId = this.getAttribute("id");
+
+                                if (name === "id" || componentId === null || componentId === "") {
+                                    return super.setAttribute(name, value);
+                                }
+
+                                let valAsStr = String(value);
+
+                                if (!__VALIDATE_ATTRIBUTE(componentId, name, valAsStr)) {
+                                    throw new TypeError(`"${value}" is not a valid value for "${name}"`);
+                                }
+
+                                return super.setAttribute(name, value);
                             }
                         }
                 "#,
@@ -338,6 +384,7 @@ fn create_class(
             let js_init_with_state = js_init_with_state.replace("__DETACH_CALLBACK", #detach_state_fn);
             let js_init_with_state = js_init_with_state.replace("__ATTRIBUTE_CHANGED_CALLBACK", #change_fn);
             let js_init_with_state = js_init_with_state.replace("__OBSERVED_CALLBACK", #observed_fn);
+            let js_init_with_state = js_init_with_state.replace("__VALIDATE_ATTRIBUTE", #validate_attribute_fn);
 
             let component = js_sys::Function::new_no_args(js_init_with_state.as_str());
 
