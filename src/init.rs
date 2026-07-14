@@ -147,7 +147,7 @@ fn validate_attribute_quote(
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(wasm_id: String, name: String, value: String) -> bool {
             if let Some(component) = #component_name::get_component(&wasm_id) {
-                return component.valid_attribute(name.as_str(), value.as_str());
+                return component.is_valid_attribute(name.as_str(), value.as_str());
             }
 
             error!("No component found for", wasm_id.clone());
@@ -207,7 +207,7 @@ fn observed_quote(observed_js_fn: &str, struct_name: &Ident) -> proc_macro2::Tok
     let expanded = quote! {
         #[callback(#js_callback_ident)]
         fn #rs_name_ident() -> &'static [&'static str] {
-            #component_name::internal_observed_attributes()
+            #component_name::observed_attributes()
         }
     };
 
@@ -485,8 +485,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 match name {
                     #validator_arms
                     _ => {
-                        error!("No field", name, "in", #struct_name_lit, "can't validate it against", value);
-                        return Err(::kaja_web::Error);
+                        // no validation for unknown attributes, assume it's valid
                     }
                 }
 
@@ -556,7 +555,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 })
             }
 
-            fn internal_observed_attributes() -> &'static [&'static str] {
+            fn observed_attributes() -> &'static [&'static str] {
                 &[#observed_attributes]
             }
 
@@ -575,12 +574,12 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                     return Err(Error);
                 }
 
-                if !Self::internal_observed_attributes().contains(&name) {
+                if !Self::observed_attributes().contains(&name) {
                     error!("Attribute not observed:", name, "in set_attribute");
                     return Err(Error);
                 }
 
-                let valid = self.valid_attribute(name, value);
+                let valid = self.is_valid_attribute(name, value);
 
                 if !valid {
                     error!("Invalid type for attribute value:", value, "for name", name, "in set_attribute");
@@ -597,7 +596,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 Ok(())
             }
 
-            fn valid_attribute(&self, name: &str, value: &str) -> bool {
+            fn is_valid_attribute(&self, name: &str, value: &str) -> bool {
                 let handle = self.handle.borrow();
                 let attr = handle.attribute_values.borrow();
 
