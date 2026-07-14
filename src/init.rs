@@ -35,14 +35,14 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         }
     };
 
-    let struct_name_ident = &component_struct_item.ident;
+    let struct_ident = &component_struct_item.ident;
 
-    let create_class_js = format!("createComponentClass{}", struct_name_ident);
-    let init_self_js = format!("initSelf{}", struct_name_ident);
-    let attach_js = format!("attachComponent{}", struct_name_ident);
-    let detach_js = format!("detachComponent{}", struct_name_ident);
-    let observed_js = format!("observedComponentAttribute{}", struct_name_ident);
-    let changed_js = format!("changedComponentAttribute{}", struct_name_ident);
+    let create_class_js = format!("createComponentClass{}", struct_ident);
+    let init_self_js = format!("initSelf{}", struct_ident);
+    let attach_js = format!("attachComponent{}", struct_ident);
+    let detach_js = format!("detachComponent{}", struct_ident);
+    let observed_js = format!("observedComponentAttribute{}", struct_ident);
+    let changed_js = format!("changedComponentAttribute{}", struct_ident);
 
     let create_class_js_indent = Ident::new(&create_class_js, Span::call_site());
     let init_self_js_ident = Ident::new(&init_self_js, Span::call_site());
@@ -55,18 +55,18 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         detach_js.as_str(),
         observed_js.as_str(),
         changed_js.as_str(),
-        struct_name_ident,
     );
 
     let rs_self = gen_rust_self(component_struct_item.clone(), init_self_js_ident);
-    let attach_fn = attach_quote(&attach_js, struct_name_ident);
-    let detach_fn = detach_quote(&detach_js, struct_name_ident);
-    let observed_fn = observed_quote(&observed_js, struct_name_ident);
-    let changed_fn = changed_quote(&changed_js, struct_name_ident);
-    let component_impl = component_impl_quote(struct_name_ident);
+    let attach_fn = attach_quote(&attach_js, struct_ident);
+    let detach_fn = detach_quote(&detach_js, struct_ident);
+    let observed_fn = observed_quote(&observed_js, struct_ident);
+    let changed_fn = changed_quote(&changed_js, struct_ident);
+    let component_impl = component_impl_quote(struct_ident);
     let component_full_impl = create_component(&component_struct_item);
 
     let expanded = quote! {
+        #[allow(dead_code, unreachable_code)]
         #component_struct_item
         #component_impl
         #component_full_impl
@@ -91,6 +91,7 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
     let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
+        #[allow(unreachable_code)]
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(id: String) {
             if let Some(component) = #component_name::get_component(&id) {
@@ -114,6 +115,7 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
     let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
+        #[allow(unreachable_code)]
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(wasm_id: String) {
             if let Some(component) = #component_name::get_component(&wasm_id) {
@@ -136,10 +138,12 @@ fn component_impl_quote(struct_name: &Ident) -> proc_macro2::TokenStream {
     let init_component_fn = Ident::new(&init_fn, struct_name.span());
 
     let expanded = quote! {
+        #[allow(unreachable_code)]
         ::inventory::submit! {
             InitComponentFn(#init_component_fn)
         }
 
+        #[allow(unreachable_code)]
         pub fn #init_component_fn() {
             log!("Init component", stringify!(#struct_name));
         }
@@ -155,6 +159,7 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
     let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
+        #[allow(unreachable_code)]
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(element_id: String, key: String, from: String, to: String) {
             if let Some(component) = #component_name::get_component(&element_id) {
@@ -177,6 +182,7 @@ fn observed_quote(observed_js_fn: &str, struct_name: &Ident) -> proc_macro2::Tok
     let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
+        #[allow(unreachable_code)]
         #[callback(#js_callback_ident)]
         fn #rs_name_ident() -> &'static [&'static str] {
             #component_name::internal_observed_attributes()
@@ -231,6 +237,7 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
         Ident::new(&format!("{}RefContainer", struct_ident), Span::call_site());
 
     let expanded = quote! {
+        #[allow(unreachable_code)]
         #[callback(#js_name)]
         #[allow(non_snake_case)]
         pub fn #rust_ident(current_id: String) -> String {  // init_component_state_struct_name, returns id for the instance of the element
@@ -271,15 +278,16 @@ fn create_class(
     detach_state_fn: &str,
     observed_fn: &str,
     change_fn: &str,
-    _struct_name: &Ident,
 ) -> proc_macro2::TokenStream {
     let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
 
     let expanded = quote! {
+        #[allow(unreachable_code)]
         ::inventory::submit! {
             InitComponentFn(#class_creator)
         }
 
+        #[allow(unreachable_code)]
         #[allow(non_snake_case)]
         pub fn #class_creator() { // createComponentTheStructName
         let component_name = #name_str_lit;
@@ -362,7 +370,8 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
     let store_name_str = store_name(struct_ident);
     let store_ident = Ident::new(&store_name_str, Span::call_site());
 
-    let (setter_arms, getter_arms, observed_attributes) = match &struct_item.fields {
+    let (setter_arms, getter_arms, validator_arms, observed_attributes) = match &struct_item.fields
+    {
         Fields::Named(fields) => {
             let setter_arms = fields.named.iter().filter_map(|field| {
                 let field_ident = field.ident.as_ref()?;
@@ -383,6 +392,17 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 })
             });
 
+            let validator_arms = fields.named.iter().filter_map(|field| {
+                let field_ident = field.ident.as_ref()?;
+                let field_name = field_ident.to_string();
+                let field_ty = &field.ty;
+                Some(quote! {
+                    #field_name => {
+                        value.parse::<#field_ty>().map_err(|_| ::kaja_web::Error)?;
+                    }
+                })
+            });
+
             let observed_attributes = fields.named.iter().filter_map(|field| {
                 let field_ident = field.ident.as_ref()?;
                 let field_name = LitStr::new(&field_ident.to_string(), Span::call_site());
@@ -392,10 +412,11 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
             (
                 quote! { #(#setter_arms,)* },
                 quote! { #(#getter_arms,)* },
+                quote! { #(#validator_arms,)* },
                 quote! { #(#observed_attributes,)* },
             )
         }
-        _ => (quote! {}, quote! {}, quote! {}),
+        _ => (quote! {}, quote! {}, quote! {}, quote! {}),
     };
 
     let struct_name_lit = LitStr::new(&struct_ident.to_string(), Span::call_site());
@@ -416,6 +437,18 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                     #setter_arms
                     _ => {
                         error!("No field", name, "in", #struct_name_lit, "can't set it to", value);
+                        return Err(::kaja_web::Error);
+                    }
+                }
+
+                Ok(())
+            }
+
+            fn validate_test_attribute(&self, name: &str, value: &str) -> ::kaja_web::Result<()> {
+                match name {
+                    #validator_arms
+                    _ => {
+                        error!("No field", name, "in", #struct_name_lit, "can't validate it against", value);
                         return Err(::kaja_web::Error);
                     }
                 }
@@ -496,25 +529,47 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 attr.set_test_attribute(name, new_value);
             }
 
-            fn set_attribute(&self, name: &str, value: &str) {
+            fn set_attribute(&self, name: &str, value: &str) -> Result<()> {
                 let id = self.get_id();
                 let element = get_element_by_id(&id);
 
                 if element.is_none() {
                     error!("Element not found for id:", id, "in set_attribute");
-                    return;
+                    return Err(Error);
                 }
 
                 if !Self::internal_observed_attributes().contains(&name) {
                     error!("Attribute not observed:", name, "in set_attribute");
-                    return;
+                    return Err(Error);
+                }
+
+                let valid = self.valid_attribute(name, value);
+
+                if !valid {
+                    error!("Invalid type for attribute value:", value, "for name", name, "in set_attribute");
+                    return Err(Error);
                 }
 
                 let res = element.unwrap().set_attribute(name, value);
 
                 if res.is_err() {
                     error!("Failed to set attribute:", name, "in set_attribute");
+                    return Err(Error);
                 }
+
+                Ok(())
+            }
+
+            fn valid_attribute(&self, name: &str, value: &str) -> bool {
+                let handle = self.handle.borrow();
+                let attr = handle.attribute_values.borrow();
+
+                if attr.validate_test_attribute(name, value).is_err() {
+                    error!("Failed to parse attribute:", name, "with value:", value, "in set_attribute");
+                    return false;
+                }
+
+                true
             }
 
             fn get_attribute_string(&self, name: &str) -> Option<String> {
