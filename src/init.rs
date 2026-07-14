@@ -95,7 +95,6 @@ fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::To
     let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
-        #[allow(unreachable_code)]
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(id: String) {
             if let Some(component) = #component_name::get_component(&id) {
@@ -119,12 +118,11 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
     let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
-        #[allow(unreachable_code)]
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(wasm_id: String) {
             if let Some(component) = #component_name::get_component(&wasm_id) {
                 component.disconnected();
-                #store_ident.with(|store| {
+        #store_ident.with(|store| {
                     store.borrow_mut().remove(&wasm_id);
                 });
             } else {
@@ -146,7 +144,6 @@ fn validate_attribute_quote(
     let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
-        #[allow(unreachable_code)]
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(wasm_id: String, name: String, value: String) -> bool {
             if let Some(component) = #component_name::get_component(&wasm_id) {
@@ -167,12 +164,10 @@ fn component_impl_quote(struct_name: &Ident) -> proc_macro2::TokenStream {
     let init_component_fn = Ident::new(&init_fn, struct_name.span());
 
     let expanded = quote! {
-        #[allow(unreachable_code)]
-        ::inventory::submit! {
+                ::inventory::submit! {
             InitComponentFn(#init_component_fn)
         }
 
-        #[allow(unreachable_code)]
         pub fn #init_component_fn() {
             log!("Init component", stringify!(#struct_name));
         }
@@ -188,7 +183,6 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
     let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
-        #[allow(unreachable_code)]
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(element_id: String, key: String, from: String, to: String) {
             if let Some(component) = #component_name::get_component(&element_id) {
@@ -211,7 +205,6 @@ fn observed_quote(observed_js_fn: &str, struct_name: &Ident) -> proc_macro2::Tok
     let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
-        #[allow(unreachable_code)]
         #[callback(#js_callback_ident)]
         fn #rs_name_ident() -> &'static [&'static str] {
             #component_name::internal_observed_attributes()
@@ -266,7 +259,6 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
         Ident::new(&format!("{}RefContainer", struct_ident), Span::call_site());
 
     let expanded = quote! {
-        #[allow(unreachable_code)]
         #[callback(#js_name)]
         #[allow(non_snake_case)]
         pub fn #rust_ident(current_id: String) -> String {  // init_component_state_struct_name, returns id for the instance of the element
@@ -312,12 +304,10 @@ fn create_class(
     let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
 
     let expanded = quote! {
-        #[allow(unreachable_code)]
         ::inventory::submit! {
             InitComponentFn(#class_creator)
         }
 
-        #[allow(unreachable_code)]
         #[allow(non_snake_case)]
         pub fn #class_creator() { // createComponentTheStructName
         let component_name = #name_str_lit;
