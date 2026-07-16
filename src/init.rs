@@ -2,7 +2,7 @@ use proc_macro as pm;
 use proc_macro2::Span;
 use quote::quote;
 use syn::parse2;
-use syn::{Fields, Ident, ItemStruct, LitStr};
+use syn::{Attribute, Fields, Ident, ItemStruct, LitStr};
 
 pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::TokenStream {
     // Parse this #[component("my-tag")]) for a struct
@@ -65,14 +65,14 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     let observed_fn = observed_quote(&observed_js, struct_ident);
     let changed_fn = changed_quote(&changed_js, struct_ident);
     let component_impl = component_impl_quote(struct_ident);
-    let component_full_impl = create_component(&component_struct_item);
+    let component_methods = create_component(&component_struct_item);
     let validate_attribute_fn = validate_attribute_quote(&validate_attribute_js, struct_ident);
 
     let expanded = quote! {
         #[allow(dead_code, unreachable_code)]
         #component_struct_item
         #component_impl
-        #component_full_impl
+        #component_methods
 
         #create_js_class_fn
 
@@ -353,7 +353,7 @@ fn create_class(
                             setAttribute(name, value) {
                                 let componentId = this.getAttribute("id");
 
-                                if (name === "id" || componentId === null || componentId === "") {
+                                if (name === "id" || !componentId) {
                                     return super.setAttribute(name, value);
                                 }
 
@@ -369,7 +369,8 @@ fn create_class(
                 "#,
             );
 
-            let js_init_with_state = js_init.replace("__INIT_SELF_CALLBACK", #init_self_fn);
+            let js_init_with_state = js_init;
+            let js_init_with_state = js_init_with_state.replace("__INIT_SELF_CALLBACK", #init_self_fn);
             let js_init_with_state = js_init_with_state.replace("__ATTACH_CALLBACK", #attach_state_fn);
             let js_init_with_state = js_init_with_state.replace("__DETACH_CALLBACK", #detach_state_fn);
             let js_init_with_state = js_init_with_state.replace("__ATTRIBUTE_CHANGED_CALLBACK", #change_fn);
@@ -398,6 +399,10 @@ fn create_class(
     expanded
 }
 
+fn has_attribute_marker(attr: &Attribute) -> bool {
+    attr.path().is_ident("attribute")
+}
+
 fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
     let struct_ident = &struct_item.ident;
     let struct_ref_container =
@@ -410,7 +415,12 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
     let (setter_arms, getter_arms, validator_arms, observed_attributes) = match &struct_item.fields
     {
         Fields::Named(fields) => {
-            let setter_arms = fields.named.iter().filter_map(|field| {
+            let attribute_fields = fields
+                .named
+                .iter()
+                .filter(|field| field.attrs.iter().any(has_attribute_marker));
+
+            let setter_arms = attribute_fields.clone().filter_map(|field| {
                 let field_ident = field.ident.as_ref()?;
                 let field_name = field_ident.to_string();
                 let field_ty = &field.ty;
@@ -421,7 +431,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 })
             });
 
-            let getter_arms = fields.named.iter().filter_map(|field| {
+            let getter_arms = attribute_fields.clone().filter_map(|field| {
                 let field_ident = field.ident.as_ref()?;
                 let field_name = field_ident.to_string();
                 Some(quote! {
@@ -429,7 +439,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 })
             });
 
-            let validator_arms = fields.named.iter().filter_map(|field| {
+            let validator_arms = attribute_fields.clone().filter_map(|field| {
                 let field_ident = field.ident.as_ref()?;
                 let field_name = field_ident.to_string();
                 let field_ty = &field.ty;
@@ -440,7 +450,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 })
             });
 
-            let observed_attributes = fields.named.iter().filter_map(|field| {
+            let observed_attributes = attribute_fields.filter_map(|field| {
                 let field_ident = field.ident.as_ref()?;
                 let field_name = LitStr::new(&field_ident.to_string(), Span::call_site());
                 Some(quote! { #field_name })

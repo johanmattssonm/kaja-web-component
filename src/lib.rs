@@ -3,7 +3,7 @@ mod init;
 use proc_macro as pm;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::ItemStruct;
+use syn::{Fields, ItemStruct};
 
 #[proc_macro_attribute]
 pub fn component(attr: pm::TokenStream, item: pm::TokenStream) -> pm::TokenStream {
@@ -20,6 +20,14 @@ pub fn component(attr: pm::TokenStream, item: pm::TokenStream) -> pm::TokenStrea
     };
 
     input.attrs.push(syn::parse_quote!(#[derive(Default)]));
+
+    if let Fields::Named(fields) = &mut input.fields {
+        for field in &mut fields.named {
+            field
+                .attrs
+                .retain(|attr| !attr.path().is_ident("attribute"));
+        }
+    }
 
     // Add the functions needed for a complete web component using kaja-web
     let new_item_ts2 = quote!(#input);
