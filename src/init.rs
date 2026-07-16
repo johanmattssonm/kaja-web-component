@@ -36,6 +36,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     };
 
     let struct_ident = &component_struct_item.ident;
+    let emitted_struct_item = sanitize_component_struct(&component_struct_item);
 
     let create_class_js = format!("createComponentClass{}", struct_ident);
     let init_self_js = format!("initSelf{}", struct_ident);
@@ -70,7 +71,7 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
 
     let expanded = quote! {
         #[allow(dead_code, unreachable_code)]
-        #component_struct_item
+        #emitted_struct_item
         #component_impl
         #component_methods
 
@@ -86,6 +87,21 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
     };
 
     expanded.into()
+}
+
+fn sanitize_component_struct(struct_item: &ItemStruct) -> ItemStruct {
+    let mut sanitized = struct_item.clone();
+    sanitized.attrs.push(syn::parse_quote!(#[derive(Default)]));
+
+    if let Fields::Named(fields) = &mut sanitized.fields {
+        for field in &mut fields.named {
+            field
+                .attrs
+                .retain(|attr| !attr.path().is_ident("attribute"));
+        }
+    }
+
+    sanitized
 }
 
 fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::TokenStream {
@@ -479,6 +495,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 let _ = self.try_set_test_attribute(name, value);
             }
 
+            #[allow(unreachable_code)]
             fn try_set_test_attribute(&mut self, name: &str, value: &str) -> ::kaja_web::Result<()> {
                 match name {
                     #setter_arms
@@ -491,6 +508,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 Ok(())
             }
 
+            #[allow(unreachable_code)]
             fn validate_test_attribute(&self, name: &str, value: &str) -> ::kaja_web::Result<()> {
                 match name {
                     #validator_arms
