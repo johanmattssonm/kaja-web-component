@@ -610,7 +610,15 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 attr.set_test_attribute(name, new_value);
             }
 
-            fn set_attribute(&self, name: &str, value: &str) -> Result<()> {
+            fn set_attribute<T>(&self, name: &str, value: T) -> Result<()>
+            where
+                T: ToString,
+            {
+                let value = value.to_string();
+                self.set_attribute_string(name, &value)
+            }
+
+            fn set_attribute_string(&self, name: &str, value: &str) -> Result<()> {
                 let id = self.get_id();
                 let element = get_element_by_id(&id);
 
@@ -699,7 +707,6 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 let attr = self.attribute_values.borrow();
                 f(&attr);
             }
-
 
             fn get_id(&self) -> String {
                 self.handle.borrow().id.clone()
