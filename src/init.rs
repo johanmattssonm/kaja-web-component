@@ -180,7 +180,7 @@ fn component_impl_quote(struct_name: &Ident) -> proc_macro2::TokenStream {
     let init_component_fn = Ident::new(&init_fn, struct_name.span());
 
     let expanded = quote! {
-                ::inventory::submit! {
+        ::inventory::submit! {
             InitComponentFn(#init_component_fn)
         }
 
@@ -251,6 +251,10 @@ fn from_pascal_to_snake(fn_name: &str) -> String {
     }
 
     result
+}
+
+fn struct_name_to_shouty_snake(struct_name: &Ident) -> String {
+    from_pascal_to_snake(&struct_name.to_string()).to_uppercase()
 }
 
 fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenStream {
@@ -427,6 +431,13 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
 
     let store_name_str = store_name(struct_ident);
     let store_ident = Ident::new(&store_name_str, Span::call_site());
+    let observed_attributes_const = Ident::new(
+        &format!(
+            "{}_OBSERVED_ATTRIBUTES",
+            struct_name_to_shouty_snake(struct_ident)
+        ),
+        Span::call_site(),
+    );
 
     let (setter_arms, getter_arms, validator_arms, observed_attributes) = match &struct_item.fields
     {
@@ -565,9 +576,12 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
             }
         }
 
+        static #observed_attributes_const: &[&str] = &[#observed_attributes];
+
         #[derive(Default)]
         struct #component_ident {
             handle: std::rc::Rc<std::cell::RefCell<#struct_ref_container>>,
+            attribute_values: std::rc::Rc<std::cell::RefCell<#struct_ident>>,
         }
 
         impl #component_ident {
@@ -578,18 +592,21 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                     return None;
                 }
 
+                let handle = handle.unwrap();
+                let attribute_values = handle.borrow().attribute_values.clone();
+
                 Some(#component_ident {
-                    handle: handle.unwrap(),
+                    handle,
+                    attribute_values,
                 })
             }
 
             fn observed_attributes() -> &'static [&'static str] {
-                &[#observed_attributes]
+                #observed_attributes_const
             }
 
             fn internal_attributes_update(&self, name: &str, _old_value: &str, new_value: &str) {
-                let handle = self.handle.borrow();
-                let mut attr = handle.attribute_values.borrow_mut();
+                let mut attr = self.attribute_values.borrow_mut();
                 attr.set_test_attribute(name, new_value);
             }
 
@@ -625,8 +642,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
             }
 
             fn is_valid_attribute(&self, name: &str, value: &str) -> bool {
-                let handle = self.handle.borrow();
-                let attr = handle.attribute_values.borrow();
+                let attr = self.attribute_values.borrow();
 
                 if attr.validate_test_attribute(name, value).is_err() {
                     error!("Failed to parse attribute:", name, "with value:", value, "in set_attribute");
@@ -637,8 +653,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
             }
 
             fn get_attribute_string(&self, name: &str) -> Option<String> {
-                let handle = self.handle.borrow();
-                let attr = handle.attribute_values.borrow();
+                let attr = self.attribute_values.borrow();
                 attr.get_attribute(name)
             }
 
@@ -658,8 +673,33 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
             }
 
             fn get_attributes(&self) -> std::rc::Rc<std::cell::RefCell<#struct_ident>> {
-                self.handle.borrow().attribute_values.clone()
+                self.attribute_values.clone()
             }
+
+            fn borrow(&self) -> std::cell::Ref<'_, #struct_ident> {
+                self.attribute_values.borrow()
+            }
+
+            fn borrow_mut(&self) -> std::cell::RefMut<'_, #struct_ident> {
+                self.attribute_values.borrow_mut()
+            }
+
+            fn with_mut<F>(&self, f: F)
+            where
+                F: FnOnce(&mut #struct_ident),
+            {
+                let mut attr = self.attribute_values.borrow_mut();
+                f(&mut attr);
+            }
+
+            fn with<F>(&self, f: F)
+            where
+                F: FnOnce(&#struct_ident),
+            {
+                let attr = self.attribute_values.borrow();
+                f(&attr);
+            }
+
 
             fn get_id(&self) -> String {
                 self.handle.borrow().id.clone()

@@ -728,4 +728,4 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[patch.unused]]
 name = "kaja-callback-macro"
-version = "1.0.0"
+version = "1.0.2"
