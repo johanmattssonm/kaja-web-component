@@ -614,6 +614,73 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
             where
                 T: ToString,
             {
+                <Self as ::kaja_web::ComponentHandle>::set_attribute(self, name, value)
+            }
+
+            fn set_attribute_string(&self, name: &str, value: &str) -> Result<()> {
+                <Self as ::kaja_web::ComponentHandle>::set_attribute_string(self, name, value)
+            }
+
+            fn is_valid_attribute(&self, name: &str, value: &str) -> bool {
+                let attr = self.attribute_values.borrow();
+
+                if attr.validate_test_attribute(name, value).is_err() {
+                    error!("Failed to parse attribute:", name, "with value:", value, "in set_attribute");
+                    return false;
+                }
+
+                true
+            }
+
+            fn get_attribute_string(&self, name: &str) -> Option<String> {
+                <Self as ::kaja_web::ComponentHandle>::get_attribute_string(self, name)
+            }
+
+            fn get_attribute<T>(&self, name: &str) -> Option<T>
+            where
+                T: std::str::FromStr,
+            {
+                <Self as ::kaja_web::ComponentHandle>::get_attribute(self, name)
+            }
+
+            fn get_attributes(&self) -> std::rc::Rc<std::cell::RefCell<#struct_ident>> {
+                <Self as ::kaja_web::ComponentHandle>::get_attributes(self)
+            }
+
+            fn borrow(&self) -> std::cell::Ref<'_, #struct_ident> {
+                <Self as ::kaja_web::ComponentHandle>::borrow(self)
+            }
+
+            fn borrow_mut(&self) -> std::cell::RefMut<'_, #struct_ident> {
+                <Self as ::kaja_web::ComponentHandle>::borrow_mut(self)
+            }
+
+            fn with_mut<F>(&self, f: F)
+            where
+                F: FnOnce(&mut #struct_ident),
+            {
+                <Self as ::kaja_web::ComponentHandle>::with_mut(self, f)
+            }
+
+            fn with<F>(&self, f: F)
+            where
+                F: FnOnce(&#struct_ident),
+            {
+                <Self as ::kaja_web::ComponentHandle>::with(self, f)
+            }
+
+            fn get_id(&self) -> String {
+                <Self as ::kaja_web::ComponentHandle>::get_id(self)
+            }
+        }
+
+        impl ::kaja_web::ComponentHandle for #component_ident {
+            type State = #struct_ident;
+
+            fn set_attribute<T>(&self, name: &str, value: T) -> Result<()>
+            where
+                T: ToString,
+            {
                 let value = value.to_string();
                 self.set_attribute_string(name, &value)
             }
@@ -647,17 +714,6 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 }
 
                 Ok(())
-            }
-
-            fn is_valid_attribute(&self, name: &str, value: &str) -> bool {
-                let attr = self.attribute_values.borrow();
-
-                if attr.validate_test_attribute(name, value).is_err() {
-                    error!("Failed to parse attribute:", name, "with value:", value, "in set_attribute");
-                    return false;
-                }
-
-                true
             }
 
             fn get_attribute_string(&self, name: &str) -> Option<String> {
