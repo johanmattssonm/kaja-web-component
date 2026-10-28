@@ -2,7 +2,7 @@ use proc_macro as pm;
 use proc_macro2::Span;
 use quote::quote;
 use syn::parse2;
-use syn::{Ident, ItemStruct, LitStr};
+use syn::{Attribute, Fields, Ident, ItemStruct, LitStr};
 
 pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::TokenStream {
     // Parse this #[component("my-tag")]) for a struct
@@ -35,16 +35,16 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         }
     };
 
-    let struct_name_ident = &component_struct_item.ident;
+    let struct_ident = &component_struct_item.ident;
+    let emitted_struct_item = sanitize_component_struct(&component_struct_item);
 
-    let global_store = generate_component_store(struct_name_ident.clone());
-
-    let create_class_js = format!("createComponentClass{}", struct_name_ident);
-    let init_self_js = format!("initSelf{}", struct_name_ident);
-    let attach_js = format!("attachComponent{}", struct_name_ident);
-    let detach_js = format!("detachComponent{}", struct_name_ident);
-    let observed_js = format!("observedComponentAttribute{}", struct_name_ident);
-    let changed_js = format!("changedComponentAttribute{}", struct_name_ident);
+    let create_class_js = format!("createComponentClass{}", struct_ident);
+    let init_self_js = format!("initSelf{}", struct_ident);
+    let attach_js = format!("attachComponent{}", struct_ident);
+    let detach_js = format!("detachComponent{}", struct_ident);
+    let observed_js = format!("observedComponentAttribute{}", struct_ident);
+    let changed_js = format!("changedComponentAttribute{}", struct_ident);
+    let validate_attribute_js = format!("validateAttribute{}", struct_ident);
 
     let create_class_js_indent = Ident::new(&create_class_js, Span::call_site());
     let init_self_js_ident = Ident::new(&init_self_js, Span::call_site());
@@ -57,64 +57,64 @@ pub fn component_impl(attr: pm::TokenStream, item: pm::TokenStream) -> pm::Token
         detach_js.as_str(),
         observed_js.as_str(),
         changed_js.as_str(),
-        struct_name_ident,
+        validate_attribute_js.as_str(),
     );
 
     let rs_self = gen_rust_self(component_struct_item.clone(), init_self_js_ident);
-    let attach_fn = attach_quote(&attach_js, struct_name_ident);
-    let detach_fn = detach_quote(&detach_js, struct_name_ident);
-    let observed_fn = observed_quote(&observed_js, struct_name_ident);
-    let changed_fn = changed_quote(&changed_js, struct_name_ident);
-    let component_impl = component_impl_quote(struct_name_ident);
+    let attach_fn = attach_quote(&attach_js, struct_ident);
+    let detach_fn = detach_quote(&detach_js, struct_ident);
+    let observed_fn = observed_quote(&observed_js, struct_ident);
+    let changed_fn = changed_quote(&changed_js, struct_ident);
+    let component_impl = component_impl_quote(struct_ident);
+    let component_methods = create_component(&component_struct_item);
+    let validate_attribute_fn = validate_attribute_quote(&validate_attribute_js, struct_ident);
 
     let expanded = quote! {
-        #global_store
-        #rs_self
-        #component_struct_item
+        #[allow(dead_code, unreachable_code)]
+        #emitted_struct_item
+        #component_impl
+        #component_methods
+
         #create_js_class_fn
+
+        #rs_self
+
         #attach_fn
         #detach_fn
         #observed_fn
         #changed_fn
-        #component_impl
+        #validate_attribute_fn
     };
 
     expanded.into()
 }
 
-fn storage_for_struct_impl(struct_name: &Ident) -> proc_macro2::TokenStream {
-    let store_name_str = store_name(struct_name);
-    let store_ident = Ident::new(&store_name_str, Span::call_site());
+fn sanitize_component_struct(struct_item: &ItemStruct) -> ItemStruct {
+    let mut sanitized = struct_item.clone();
+    sanitized.attrs.push(syn::parse_quote!(#[derive(Default)]));
 
-    let expanded = quote! {
-        impl ::kaja_web::ComponentStorage for #struct_name {
-            fn storage() -> &'static std::thread::LocalKey<
-                std::cell::RefCell<
-                    std::collections::HashMap<String, Rc<RefCell<#struct_name>>>,
-                >,
-            > {
-                &#store_ident
-            }
+    if let Fields::Named(fields) = &mut sanitized.fields {
+        for field in &mut fields.named {
+            field
+                .attrs
+                .retain(|attr| !attr.path().is_ident("attribute"));
         }
-    };
+    }
 
-    expanded
+    sanitized
 }
 
 fn attach_quote(atach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::TokenStream {
     let js_callback_ident = Ident::new(atach_state_js_fn, Span::call_site());
     let rs_name_str = from_pascal_to_snake(atach_state_js_fn);
     let rs_name_ident = Ident::new(&rs_name_str, Span::call_site());
-    let store_name_str = store_name(struct_name);
-    let store_ident = Ident::new(&store_name_str, Span::call_site());
+    let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(id: String) {
-            let exists = #store_ident.with(|store| store.borrow().contains_key(&id));
-
-            if exists {
-                #struct_name::connected(&id);
+            if let Some(component) = #component_name::get_component(&id) {
+                component.connected();
             } else {
                 error!("Component id not found in connect.", id.clone());
             }
@@ -131,20 +131,43 @@ fn detach_quote(detach_state_js_fn: &str, struct_name: &Ident) -> proc_macro2::T
 
     let store_name_str = store_name(struct_name);
     let store_ident = Ident::new(&store_name_str, Span::call_site());
+    let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(wasm_id: String) {
-            let exists = #store_ident.with(|store| store.borrow().contains_key(&wasm_id));
-
-            if exists {
-                #struct_name::disconnected(&wasm_id);
-                #store_ident.with(|store| {
+            if let Some(component) = #component_name::get_component(&wasm_id) {
+                component.disconnected();
+        #store_ident.with(|store| {
                     store.borrow_mut().remove(&wasm_id);
                 });
             } else {
                 error!("Component id not found in disconnected.", wasm_id.clone());
             }
+        }
+    };
+
+    expanded
+}
+
+fn validate_attribute_quote(
+    validate_attribute_js: &str,
+    struct_name: &Ident,
+) -> proc_macro2::TokenStream {
+    let js_callback_ident = Ident::new(validate_attribute_js, Span::call_site());
+    let rs_name_str = from_pascal_to_snake(validate_attribute_js);
+    let rs_name_ident = Ident::new(&rs_name_str, Span::call_site());
+    let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
+
+    let expanded = quote! {
+        #[callback(#js_callback_ident)]
+        fn #rs_name_ident(wasm_id: String, name: String, value: String) -> bool {
+            if let Some(component) = #component_name::get_component(&wasm_id) {
+                return component.is_valid_attribute(name.as_str(), value.as_str());
+            }
+
+            error!("No component found for", wasm_id.clone());
+            false
         }
     };
 
@@ -173,18 +196,15 @@ fn changed_quote(changed_state_js_fn: &str, struct_name: &Ident) -> proc_macro2:
     let js_callback_ident = Ident::new(changed_state_js_fn, Span::call_site());
     let rs_name_str = from_pascal_to_snake(changed_state_js_fn);
     let rs_name_ident = Ident::new(&rs_name_str, Span::call_site());
-
-    let store_name_str = store_name(struct_name);
-    let store_ident = Ident::new(&store_name_str, Span::call_site());
+    let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
         #[callback(#js_callback_ident)]
         fn #rs_name_ident(element_id: String, key: String, from: String, to: String) {
-            let exists = #store_ident.with(|store| store.borrow().contains_key(&element_id));
-
-            if exists {
+            if let Some(component) = #component_name::get_component(&element_id) {
                 let name = key.as_str();
-                #struct_name::attribute_changed(&element_id, name, &from, &to);
+                component.internal_attributes_update(name, &from, &to);
+                component.attribute_changed(name, &from, &to);
             } else {
                 error!("Component id not found in changed attribute.", element_id.clone());
             }
@@ -198,13 +218,12 @@ fn observed_quote(observed_js_fn: &str, struct_name: &Ident) -> proc_macro2::Tok
     let js_callback_ident = Ident::new(observed_js_fn, Span::call_site());
     let rs_name_str = from_pascal_to_snake(observed_js_fn);
     let rs_name_ident = Ident::new(&rs_name_str, Span::call_site());
-
-    let struct_ident = struct_name;
+    let component_name = Ident::new(&format!("{}Component", struct_name), Span::call_site());
 
     let expanded = quote! {
         #[callback(#js_callback_ident)]
         fn #rs_name_ident() -> &'static [&'static str] {
-            #struct_ident::observed_attributes()
+            #component_name::observed_attributes()
         }
     };
 
@@ -214,37 +233,6 @@ fn observed_quote(observed_js_fn: &str, struct_name: &Ident) -> proc_macro2::Tok
 fn store_name(struct_name: &Ident) -> String {
     let store_name = from_pascal_to_snake(&struct_name.to_string()).to_uppercase() + "_COMPONENTS";
     store_name
-}
-
-fn generate_component_store(struct_name: Ident) -> proc_macro2::TokenStream {
-    // Generate only the per-component store (HashMap) here.
-    let store_name = store_name(&struct_name);
-    let store_ident = Ident::new(&store_name, Span::call_site());
-    let store_hash_map_impl = storage_for_struct_impl(&struct_name);
-
-    let expanded = quote! {
-        std::thread_local! {
-            pub static #store_ident: std::cell::RefCell<std::collections::HashMap<String, ::kaja_web::SharedComponent<#struct_name>>> =
-                std::cell::RefCell::new(std::collections::HashMap::new());
-        }
-        #store_hash_map_impl
-
-        impl #struct_name {
-            pub fn get_component(
-                component_id: &str,
-            ) -> Option<Rc<RefCell<#struct_name>>> {
-                #store_ident.with(|store| store.borrow().get(component_id).cloned())
-            }
-
-            pub fn component_exists(
-                component_id: &str,
-            ) -> bool {
-                #store_ident.with(|store| store.borrow().contains_key(component_id))
-            }
-        }
-    };
-
-    expanded
 }
 
 fn from_pascal_to_snake(fn_name: &str) -> String {
@@ -265,6 +253,10 @@ fn from_pascal_to_snake(fn_name: &str) -> String {
     result
 }
 
+fn struct_name_to_shouty_snake(struct_name: &Ident) -> String {
+    from_pascal_to_snake(&struct_name.to_string()).to_uppercase()
+}
+
 fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenStream {
     let struct_ident = &struct_item.ident;
     let store_name_str = store_name(struct_ident);
@@ -283,11 +275,15 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
     kebab_case_name = kebab_case_name.replace("_", "-");
 
     let rust_ident = Ident::new(&rust_name, Span::call_site());
+    let struct_ref_container =
+        Ident::new(&format!("{}RefContainer", struct_ident), Span::call_site());
 
     let expanded = quote! {
         #[callback(#js_name)]
         #[allow(non_snake_case)]
         pub fn #rust_ident(current_id: String) -> String {  // init_component_state_struct_name, returns id for the instance of the element
+            log!("Compoent generation previous id:", current_id.clone());
+
             let #var_ident = #struct_ident::default();
 
             let key = if current_id.is_empty() {
@@ -297,11 +293,17 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
                 current_id
             };
 
+            let component = std::rc::Rc::new(std::cell::RefCell::new(#struct_ref_container {
+                id: key.clone(),
+                attribute_values: std::rc::Rc::new(std::cell::RefCell::new(#var_ident)),
+            }));
+
             #store_ident.with(|store| {
-                store
-                    .borrow_mut()
-                    .insert(key.clone(), std::rc::Rc::new(std::cell::RefCell::new(#var_ident)));
+                store.borrow_mut().insert(key.clone(), component);
             });
+
+            log!("created key:", key.clone());
+
             key
         }
     };
@@ -317,7 +319,7 @@ fn create_class(
     detach_state_fn: &str,
     observed_fn: &str,
     change_fn: &str,
-    _struct_name: &Ident,
+    validate_attribute_fn: &str,
 ) -> proc_macro2::TokenStream {
     let name_str_lit = LitStr::new(&class_creator.to_string(), Span::call_site());
 
@@ -333,49 +335,67 @@ fn create_class(
 
             let js_init = String::from(
                 r#"
-                    return class extends HTMLElement {
-                        constructor() {
-                            super();
-                            let currentId = this.getAttribute("id");
+                        return class extends HTMLElement {
+                            constructor() {
+                                super();
+                                let currentId = this.getAttribute("id");
 
-                            if (currentId === null) {
-                                currentId = "";
+                                if (currentId === null) {
+                                    currentId = "";
+                                }
+
+                                let resolvedId = __INIT_SELF_CALLBACK(currentId);
+
+                                if (!currentId) {
+                                    this.setAttribute("id", resolvedId);
+                                }
                             }
 
-                            let resolvedId = __INIT_SELF_CALLBACK(currentId);
+                            connectedCallback() {
+                                let componentId = this.getAttribute("id");
+                                __ATTACH_CALLBACK(componentId);
+                            }
 
-                            if (!currentId) {
-                                this.setAttribute("id", resolvedId);
+                            disconnectedCallback() {
+                                let componentId = this.getAttribute("id");
+                                __DETACH_CALLBACK(componentId);
+                            }
+
+                            attributeChangedCallback(name, oldValue, newValue) {
+                                let componentId = this.getAttribute("id");
+                                __ATTRIBUTE_CHANGED_CALLBACK(componentId, name, oldValue === null ? "" : String(oldValue), newValue === null ? "" : String(newValue));
+                            }
+
+                            static get observedAttributes() {
+                                return __OBSERVED_CALLBACK();
+                            }
+
+                            setAttribute(name, value) {
+                                let componentId = this.getAttribute("id");
+
+                                if (name === "id" || !componentId) {
+                                    return super.setAttribute(name, value);
+                                }
+
+                                let valAsStr = String(value);
+
+                                if (!__VALIDATE_ATTRIBUTE(componentId, name, valAsStr)) {
+                                    throw new TypeError(`"${value}" is not a valid value for "${name}"`);
+                                }
+
+                                return super.setAttribute(name, value);
                             }
                         }
-
-                        connectedCallback() {
-                            let componentid = this.getAttribute("id");
-                            __ATTACH_CALLBACK(componentid);
-                        }
-
-                        disconnectedCallback() {
-                            let componentid = this.getAttribute("id");
-                            __DETACH_CALLBACK(componentid);
-                        }
-
-                        attributeChangedCallback(name, oldValue, newValue) {
-                            let componentid = this.getAttribute("id");
-                            __ATTRIBUTE_CHANGED_CALLBACK(componentid, name, oldValue === null ? "" : String(oldValue), newValue === null ? "" : String(newValue));
-                        }
-
-                        static get observedAttributes() {
-                            return __OBSERVED_CALLBACK();
-                        }
-                    }
-            "#,
+                "#,
             );
 
-            let js_init_with_state = js_init.replace("__INIT_SELF_CALLBACK", #init_self_fn);
+            let js_init_with_state = js_init;
+            let js_init_with_state = js_init_with_state.replace("__INIT_SELF_CALLBACK", #init_self_fn);
             let js_init_with_state = js_init_with_state.replace("__ATTACH_CALLBACK", #attach_state_fn);
             let js_init_with_state = js_init_with_state.replace("__DETACH_CALLBACK", #detach_state_fn);
             let js_init_with_state = js_init_with_state.replace("__ATTRIBUTE_CHANGED_CALLBACK", #change_fn);
             let js_init_with_state = js_init_with_state.replace("__OBSERVED_CALLBACK", #observed_fn);
+            let js_init_with_state = js_init_with_state.replace("__VALIDATE_ATTRIBUTE", #validate_attribute_fn);
 
             let component = js_sys::Function::new_no_args(js_init_with_state.as_str());
 
@@ -392,6 +412,360 @@ fn create_class(
 
             if result.is_err() {
                 error!("Failed to register component", #tag);
+            }
+        }
+    };
+
+    expanded
+}
+
+fn has_attribute_marker(attr: &Attribute) -> bool {
+    attr.path().is_ident("attribute")
+}
+
+fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
+    let struct_ident = &struct_item.ident;
+    let struct_ref_container =
+        Ident::new(&format!("{}RefContainer", struct_ident), Span::call_site());
+    let component_ident = Ident::new(&format!("{}Component", struct_ident), Span::call_site());
+
+    let store_name_str = store_name(struct_ident);
+    let store_ident = Ident::new(&store_name_str, Span::call_site());
+    let observed_attributes_const = Ident::new(
+        &format!(
+            "{}_OBSERVED_ATTRIBUTES",
+            struct_name_to_shouty_snake(struct_ident)
+        ),
+        Span::call_site(),
+    );
+
+    let (setter_arms, getter_arms, validator_arms, observed_attributes) = match &struct_item.fields
+    {
+        Fields::Named(fields) => {
+            let attribute_fields = fields
+                .named
+                .iter()
+                .filter(|field| field.attrs.iter().any(has_attribute_marker));
+
+            let setter_arms = attribute_fields.clone().filter_map(|field| {
+                let field_ident = field.ident.as_ref()?;
+                let field_name = field_ident.to_string();
+                let field_ty = &field.ty;
+                Some(quote! {
+                    #field_name => {
+                        self.#field_ident = value.parse::<#field_ty>().map_err(|_| ::kaja_web::Error)?;
+                    }
+                })
+            });
+
+            let getter_arms = attribute_fields.clone().filter_map(|field| {
+                let field_ident = field.ident.as_ref()?;
+                let field_name = field_ident.to_string();
+                Some(quote! {
+                    #field_name => Some(self.#field_ident.to_string())
+                })
+            });
+
+            let validator_arms = attribute_fields.clone().filter_map(|field| {
+                let field_ident = field.ident.as_ref()?;
+                let field_name = field_ident.to_string();
+                let field_ty = &field.ty;
+                Some(quote! {
+                    #field_name => {
+                        value.parse::<#field_ty>().map_err(|_| ::kaja_web::Error)?;
+                    }
+                })
+            });
+
+            let observed_attributes = attribute_fields.filter_map(|field| {
+                let field_ident = field.ident.as_ref()?;
+                let field_name = LitStr::new(&field_ident.to_string(), Span::call_site());
+                Some(quote! { #field_name })
+            });
+
+            (
+                quote! { #(#setter_arms,)* },
+                quote! { #(#getter_arms,)* },
+                quote! { #(#validator_arms,)* },
+                quote! { #(#observed_attributes,)* },
+            )
+        }
+        _ => (quote! {}, quote! {}, quote! {}, quote! {}),
+    };
+
+    let struct_name_lit = LitStr::new(&struct_ident.to_string(), Span::call_site());
+
+    let expanded = quote! {
+        thread_local! {
+            static #store_ident: std::cell::RefCell<std::collections::HashMap<String, std::rc::Rc<std::cell::RefCell<#struct_ref_container>>>> =
+                std::cell::RefCell::new(std::collections::HashMap::new());
+        }
+
+        impl #struct_ident {
+            fn set_test_attribute(&mut self, name: &str, value: &str) {
+                let _ = self.try_set_test_attribute(name, value);
+            }
+
+            #[allow(unreachable_code)]
+            fn try_set_test_attribute(&mut self, name: &str, value: &str) -> ::kaja_web::Result<()> {
+                match name {
+                    #setter_arms
+                    _ => {
+                        error!("No field", name, "in", #struct_name_lit, "can't set it to", value);
+                        return Err(::kaja_web::Error);
+                    }
+                }
+
+                Ok(())
+            }
+
+            #[allow(unreachable_code)]
+            fn validate_test_attribute(&self, name: &str, value: &str) -> ::kaja_web::Result<()> {
+                match name {
+                    #validator_arms
+                    _ => {
+                        // no validation for unknown attributes, assume it's valid
+                    }
+                }
+
+                Ok(())
+            }
+
+            fn get_attribute(&self, name: &str) -> Option<String> {
+                match name {
+                    #getter_arms
+                    _ => {
+                        error!("No field", name, "in", #struct_name_lit, "can't get it");
+                        None
+                    }
+                }
+            }
+        }
+
+        #[derive(Default)]
+        struct #struct_ref_container {
+            id: String,
+            attribute_values: std::rc::Rc<std::cell::RefCell<#struct_ident>>,
+        }
+
+        impl #struct_ref_container {
+            fn create_component(id: &str) {
+                let handle = std::rc::Rc::new(std::cell::RefCell::new(#struct_ref_container {
+                    id: id.to_string(),
+                    attribute_values: std::rc::Rc::new(std::cell::RefCell::new(#struct_ident::default())),
+                }));
+
+                Self::register_component(handle.clone());
+                let component = #component_ident::get_component(&id);
+
+                if component.is_none() {
+                    error!("Failed to register component.");
+                    return;
+                }
+
+                let component_impl = component.unwrap();
+                component_impl.connected();
+            }
+
+            fn register_component(component: std::rc::Rc<std::cell::RefCell<#struct_ref_container>>) {
+                let id = component.borrow().id.clone();
+
+                #store_ident.with(|components| {
+                    components.borrow_mut().insert(id, component);
+                });
+            }
+        }
+
+        static #observed_attributes_const: &[&str] = &[#observed_attributes];
+
+        #[derive(Default)]
+        struct #component_ident {
+            handle: std::rc::Rc<std::cell::RefCell<#struct_ref_container>>,
+            attribute_values: std::rc::Rc<std::cell::RefCell<#struct_ident>>,
+        }
+
+        impl #component_ident {
+            fn get_component(id: &str) -> Option<#component_ident> {
+                let handle = #store_ident.with(|components| components.borrow().get(id).cloned());
+
+                if !handle.is_some() {
+                    return None;
+                }
+
+                let handle = handle.unwrap();
+                let attribute_values = handle.borrow().attribute_values.clone();
+
+                Some(#component_ident {
+                    handle,
+                    attribute_values,
+                })
+            }
+
+            fn observed_attributes() -> &'static [&'static str] {
+                #observed_attributes_const
+            }
+
+            fn internal_attributes_update(&self, name: &str, _old_value: &str, new_value: &str) {
+                let mut attr = self.attribute_values.borrow_mut();
+                attr.set_test_attribute(name, new_value);
+            }
+
+            fn set_attribute<T>(&self, name: &str, value: T) -> Result<()>
+            where
+                T: ToString,
+            {
+                <Self as ::kaja_web::ComponentHandle>::set_attribute(self, name, value)
+            }
+
+            fn set_attribute_string(&self, name: &str, value: &str) -> Result<()> {
+                <Self as ::kaja_web::ComponentHandle>::set_attribute_string(self, name, value)
+            }
+
+            fn is_valid_attribute(&self, name: &str, value: &str) -> bool {
+                let attr = self.attribute_values.borrow();
+
+                if attr.validate_test_attribute(name, value).is_err() {
+                    error!("Failed to parse attribute:", name, "with value:", value, "in set_attribute");
+                    return false;
+                }
+
+                true
+            }
+
+            fn get_attribute_string(&self, name: &str) -> Option<String> {
+                <Self as ::kaja_web::ComponentHandle>::get_attribute_string(self, name)
+            }
+
+            fn get_attribute<T>(&self, name: &str) -> Option<T>
+            where
+                T: std::str::FromStr,
+            {
+                <Self as ::kaja_web::ComponentHandle>::get_attribute(self, name)
+            }
+
+            fn get_attributes(&self) -> std::rc::Rc<std::cell::RefCell<#struct_ident>> {
+                <Self as ::kaja_web::ComponentHandle>::get_attributes(self)
+            }
+
+            fn borrow(&self) -> std::cell::Ref<'_, #struct_ident> {
+                <Self as ::kaja_web::ComponentHandle>::borrow(self)
+            }
+
+            fn borrow_mut(&self) -> std::cell::RefMut<'_, #struct_ident> {
+                <Self as ::kaja_web::ComponentHandle>::borrow_mut(self)
+            }
+
+            fn with_mut<F>(&self, f: F)
+            where
+                F: FnOnce(&mut #struct_ident),
+            {
+                <Self as ::kaja_web::ComponentHandle>::with_mut(self, f)
+            }
+
+            fn with<F>(&self, f: F)
+            where
+                F: FnOnce(&#struct_ident),
+            {
+                <Self as ::kaja_web::ComponentHandle>::with(self, f)
+            }
+
+            fn get_id(&self) -> String {
+                <Self as ::kaja_web::ComponentHandle>::get_id(self)
+            }
+        }
+
+        impl ::kaja_web::ComponentHandle for #component_ident {
+            type State = #struct_ident;
+
+            fn set_attribute<T>(&self, name: &str, value: T) -> Result<()>
+            where
+                T: ToString,
+            {
+                let value = value.to_string();
+                self.set_attribute_string(name, &value)
+            }
+
+            fn set_attribute_string(&self, name: &str, value: &str) -> Result<()> {
+                let id = self.get_id();
+                let element = get_element_by_id(&id);
+
+                if element.is_none() {
+                    error!("Element not found for id:", id, "in set_attribute");
+                    return Err(Error);
+                }
+
+                if !Self::observed_attributes().contains(&name) {
+                    error!("Attribute not observed:", name, "in set_attribute");
+                    return Err(Error);
+                }
+
+                let valid = self.is_valid_attribute(name, value);
+
+                if !valid {
+                    error!("Invalid type for attribute value:", value, "for name", name, "in set_attribute");
+                    return Err(Error);
+                }
+
+                let res = element.unwrap().set_attribute(name, value);
+
+                if res.is_err() {
+                    error!("Failed to set attribute:", name, "in set_attribute");
+                    return Err(Error);
+                }
+
+                Ok(())
+            }
+
+            fn get_attribute_string(&self, name: &str) -> Option<String> {
+                let attr = self.attribute_values.borrow();
+                attr.get_attribute(name)
+            }
+
+            fn get_attribute<T>(&self, name: &str) -> Option<T>
+            where
+                T: std::str::FromStr,
+            {
+                let value = self.get_attribute_string(name)?;
+
+                match value.parse::<T>() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        error!("Failed to parse attribute:", name, "in", #struct_name_lit);
+                        None
+                    }
+                }
+            }
+
+            fn get_attributes(&self) -> std::rc::Rc<std::cell::RefCell<#struct_ident>> {
+                self.attribute_values.clone()
+            }
+
+            fn borrow(&self) -> std::cell::Ref<'_, #struct_ident> {
+                self.attribute_values.borrow()
+            }
+
+            fn borrow_mut(&self) -> std::cell::RefMut<'_, #struct_ident> {
+                self.attribute_values.borrow_mut()
+            }
+
+            fn with_mut<F>(&self, f: F)
+            where
+                F: FnOnce(&mut #struct_ident),
+            {
+                let mut attr = self.attribute_values.borrow_mut();
+                f(&mut attr);
+            }
+
+            fn with<F>(&self, f: F)
+            where
+                F: FnOnce(&#struct_ident),
+            {
+                let attr = self.attribute_values.borrow();
+                f(&attr);
+            }
+
+            fn get_id(&self) -> String {
+                self.handle.borrow().id.clone()
             }
         }
     };
