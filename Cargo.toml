@@ -2,7 +2,7 @@ cargo-features = ["edition2024"]
 
 [package]
 name = "kaja-web-component"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 description = "Web component framework for Rust targeting the WebAssembly"
 license = "MIT"
