@@ -4,6 +4,11 @@ cargo-features = ["edition2024"]
 name = "kaja-web-component"
 version = "0.1.0"
 edition = "2024"
+description = "Web component framework for Rust targeting the WebAssembly"
+license = "MIT"
+repository = "https://github.com/johanmattssonm/kaja-web-component"
+readme = "README.md"
+keywords = ["html", "web", "component", "webassembly"]
 
 [lib]
 proc-macro = true
