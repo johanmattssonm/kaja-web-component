@@ -185,7 +185,6 @@ fn component_impl_quote(struct_name: &Ident) -> proc_macro2::TokenStream {
         }
 
         pub fn #init_component_fn() {
-            log!("Init component", stringify!(#struct_name));
         }
     };
 
@@ -282,8 +281,6 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
         #[callback(#js_name)]
         #[allow(non_snake_case)]
         pub fn #rust_ident(current_id: String) -> String {  // init_component_state_struct_name, returns id for the instance of the element
-            log!("Compoent generation previous id:", current_id.clone());
-
             let #var_ident = #struct_ident::default();
 
             let key = if current_id.is_empty() {
@@ -301,8 +298,6 @@ fn gen_rust_self(struct_item: ItemStruct, js_name: Ident) -> proc_macro2::TokenS
             #store_ident.with(|store| {
                 store.borrow_mut().insert(key.clone(), component);
             });
-
-            log!("created key:", key.clone());
 
             key
         }
