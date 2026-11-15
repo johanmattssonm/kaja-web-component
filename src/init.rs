@@ -448,7 +448,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 let field_ty = &field.ty;
                 Some(quote! {
                     #field_name => {
-                        self.#field_ident = value.parse::<#field_ty>().map_err(|_| ::kaja_web::Error)?;
+                        self.#field_ident = Self::parse_attribute_value::<#field_ty>(value)?;
                     }
                 })
             });
@@ -457,7 +457,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 let field_ident = field.ident.as_ref()?;
                 let field_name = field_ident.to_string();
                 Some(quote! {
-                    #field_name => Some(self.#field_ident.to_string())
+                    #field_name => Self::to_attribute_string(&self.#field_ident)
                 })
             });
 
@@ -467,7 +467,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                 let field_ty = &field.ty;
                 Some(quote! {
                     #field_name => {
-                        value.parse::<#field_ty>().map_err(|_| ::kaja_web::Error)?;
+                        let _: #field_ty = Self::parse_attribute_value(value)?;
                     }
                 })
             });
@@ -533,6 +533,29 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
                         error!("No field", name, "in", #struct_name_lit, "can't get it");
                         None
                     }
+                }
+            }
+
+            fn try_get_attribute(&self, name: &str) -> String {
+                return self.get_attribute(name).unwrap_or_default();
+            }
+
+            fn parse_attribute_value<T: ::kaja_web::serde::de::DeserializeOwned>(value: &str) -> ::kaja_web::Result<T> {
+                if let Ok(parsed) = ::kaja_web::serde_json::from_str::<T>(value) {
+                    return Ok(parsed);
+                }
+
+                let encoded = ::kaja_web::serde_json::to_string(value).map_err(|_| ::kaja_web::Error)?;
+                ::kaja_web::serde_json::from_str::<T>(&encoded).map_err(|_| ::kaja_web::Error)
+            }
+
+            fn to_attribute_string<T: ::kaja_web::serde::Serialize>(value: &T) -> Option<String> {
+                let json = ::kaja_web::serde_json::to_string(value).ok()?;
+
+                if let Ok(as_string) = ::kaja_web::serde_json::from_str::<String>(&json) {
+                    Some(as_string)
+                } else {
+                    Some(json)
                 }
             }
         }
@@ -633,7 +656,7 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
 
             fn get_attribute<T>(&self, name: &str) -> Option<T>
             where
-                T: std::str::FromStr,
+                T: ::kaja_web::serde::de::DeserializeOwned,
             {
                 <Self as ::kaja_web::ComponentHandle>::get_attribute(self, name)
             }
@@ -718,11 +741,11 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
 
             fn get_attribute<T>(&self, name: &str) -> Option<T>
             where
-                T: std::str::FromStr,
+                T: ::kaja_web::serde::de::DeserializeOwned,
             {
                 let value = self.get_attribute_string(name)?;
 
-                match value.parse::<T>() {
+                match #struct_ident::parse_attribute_value::<T>(&value) {
                     Ok(value) => Some(value),
                     Err(_) => {
                         error!("Failed to parse attribute:", name, "in", #struct_name_lit);
