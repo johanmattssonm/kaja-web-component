@@ -1,4 +1,4 @@
-# Kaja Web Component Example
+## Kaja Web Component Example
 
 A simple example of a custom HTML component using Rust and Kaja Web. Similar in functionality to 
 other web component libraries but small and fast.
