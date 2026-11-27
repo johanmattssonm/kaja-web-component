@@ -418,6 +418,32 @@ fn has_attribute_marker(attr: &Attribute) -> bool {
     attr.path().is_ident("attribute")
 }
 
+fn attribute_name_for_field(field: &syn::Field) -> Option<String> {
+    let field_name = field.ident.as_ref()?.to_string();
+    let mut has_attribute = false;
+    let mut explicit_name: Option<String> = None;
+
+    for attr in &field.attrs {
+        if !has_attribute_marker(attr) {
+            continue;
+        }
+
+        has_attribute = true;
+
+        if let Ok(custom_name) = attr.parse_args::<LitStr>() {
+            explicit_name = Some(custom_name.value());
+        }
+    }
+
+    if let Some(name) = explicit_name {
+        Some(name)
+    } else if has_attribute {
+        Some(field_name)
+    } else {
+        None
+    }
+}
+
 fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
     let struct_ident = &struct_item.ident;
     let struct_ref_container =
@@ -437,45 +463,47 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
     let (setter_arms, getter_arms, validator_arms, observed_attributes) = match &struct_item.fields
     {
         Fields::Named(fields) => {
-            let attribute_fields = fields
+            let attribute_fields: Vec<_> = fields
                 .named
                 .iter()
-                .filter(|field| field.attrs.iter().any(has_attribute_marker));
+                .filter_map(|field| {
+                    let field_ident = field.ident.as_ref()?;
+                    let attribute_name = attribute_name_for_field(field)?;
+                    Some((field_ident, &field.ty, attribute_name))
+                })
+                .collect();
 
-            let setter_arms = attribute_fields.clone().filter_map(|field| {
-                let field_ident = field.ident.as_ref()?;
-                let field_name = field_ident.to_string();
-                let field_ty = &field.ty;
-                Some(quote! {
-                    #field_name => {
-                        self.#field_ident = Self::parse_attribute_value::<#field_ty>(value)?;
+            let setter_arms = attribute_fields.iter().map(
+                |(field_ident, field_ty, attribute_name)| {
+                    quote! {
+                        #attribute_name => {
+                            self.#field_ident = Self::parse_attribute_value::<#field_ty>(value)?;
+                        }
                     }
-                })
-            });
+                },
+            );
 
-            let getter_arms = attribute_fields.clone().filter_map(|field| {
-                let field_ident = field.ident.as_ref()?;
-                let field_name = field_ident.to_string();
-                Some(quote! {
-                    #field_name => Self::to_attribute_string(&self.#field_ident)
-                })
-            });
-
-            let validator_arms = attribute_fields.clone().filter_map(|field| {
-                let field_ident = field.ident.as_ref()?;
-                let field_name = field_ident.to_string();
-                let field_ty = &field.ty;
-                Some(quote! {
-                    #field_name => {
-                        let _: #field_ty = Self::parse_attribute_value(value)?;
+            let getter_arms = attribute_fields
+                .iter()
+                .map(|(field_ident, _, attribute_name)| {
+                    quote! {
+                        #attribute_name => Self::to_attribute_string(&self.#field_ident)
                     }
-                })
-            });
+                });
 
-            let observed_attributes = attribute_fields.filter_map(|field| {
-                let field_ident = field.ident.as_ref()?;
-                let field_name = LitStr::new(&field_ident.to_string(), Span::call_site());
-                Some(quote! { #field_name })
+            let validator_arms = attribute_fields
+                .iter()
+                .map(|(_, field_ty, attribute_name)| {
+                    quote! {
+                        #attribute_name => {
+                            let _: #field_ty = Self::parse_attribute_value(value)?;
+                        }
+                    }
+                });
+
+            let observed_attributes = attribute_fields.iter().map(|(_, _, attribute_name)| {
+                let field_name = LitStr::new(attribute_name, Span::call_site());
+                quote! { #field_name }
             });
 
             (
