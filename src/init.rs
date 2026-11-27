@@ -690,6 +690,16 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
             fn get_id(&self) -> String {
                 <Self as ::kaja_web::ComponentHandle>::get_id(self)
             }
+
+            fn get_content(&self) -> Option<String> {
+                let id = self.get_id();
+                let tag = get_element_by_id(&id)?;
+                Some(tag.inner_html())
+            }
+
+            fn try_get_content(&self) -> String {
+                self.get_content().unwrap_or_default()
+            }
         }
 
         impl ::kaja_web::ComponentHandle for #component_ident {
@@ -784,6 +794,14 @@ fn create_component(struct_item: &ItemStruct) -> proc_macro2::TokenStream {
 
             fn get_id(&self) -> String {
                 self.handle.borrow().id.clone()
+            }
+
+            fn get_content(&self) -> Option<String> {
+                #component_ident::get_content(self)
+            }
+
+            fn try_get_content(&self) -> String {
+                #component_ident::try_get_content(self)
             }
         }
     };
